@@ -57,8 +57,8 @@ class User(UserMixin, db.Model):
         allowed_roles = {"student", "mentor", "coach"}
         if not isinstance(value, list):
             raise ValueError("Roles must be a list.")
-        if not value or any(role not in allowed_roles for role in value):
-            raise ValueError("Please select at least one valid role.")
+        if any(not isinstance(role, str) or role not in allowed_roles for role in value):
+            raise ValueError("Please select valid roles.")
         self.roles_json = json.dumps(list(dict.fromkeys(value)))
 
     @property
