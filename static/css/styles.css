@@ -1444,11 +1444,18 @@ a.side-item { text-decoration: none; }
 
 .dd-item {
   display: block;
+  width: 100%;
+  box-sizing: border-box;
   padding: 9px 12px;
+  border: none;
   border-radius: 8px;
+  background: transparent;
   color: var(--txt2);
   font-size: 14px;
+  text-align: left;
   text-decoration: none;
+  font-family: inherit;
+  cursor: pointer;
   transition: background 0.18s, color 0.18s;
 }
 .dd-item:hover, .dd-item:focus-visible { background: rgba(255, 255, 255, 0.05); color: var(--txt); outline: none; }
@@ -2017,16 +2024,30 @@ a.side-item { text-decoration: none; }
 
 .r-field { display: block; color: var(--txt2); font-size: 13px; margin-bottom: 16px; }
 .r-field em { color: var(--txt3); font-style: normal; }
-.r-field > input, .r-field > textarea {
+.r-field > input, .r-field > textarea, .r-password-wrap input {
   display: block; width: 100%; margin-top: 8px; padding: 12px 14px;
   background: var(--card); border: 1px solid var(--line); border-radius: 10px;
   color: var(--txt); font-size: 14px; outline: none; resize: vertical;
   transition: border-color .18s, box-shadow .18s;
 }
-.r-field > input:focus, .r-field > textarea:focus { border-color: var(--purple); box-shadow: 0 0 0 3px rgba(124,108,245,.18); }
+.r-password-wrap { position: relative; margin-top: 8px; }
+.r-password-wrap input { margin-top: 0; padding-right: 64px; }
+.r-password-toggle {
+  position: absolute; top: 50%; right: 10px; transform: translateY(-50%);
+  width: 30px; height: 30px; display: grid; place-items: center;
+  padding: 0; border: 0; border-radius: 8px; background: transparent;
+  color: var(--txt3); cursor: pointer; transition: background .18s;
+}
+.r-password-toggle:hover { background: rgba(255, 255, 255, .05); }
+.r-password-toggle:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
+.r-password-toggle svg {
+  width: 18px; height: 18px; stroke: currentColor; fill: none;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+.r-field > input:focus, .r-field > textarea:focus, .r-password-wrap input:focus { border-color: var(--purple); box-shadow: 0 0 0 3px rgba(124,108,245,.18); }
 .r-field > input::placeholder, .r-field > textarea::placeholder { color: var(--txt3); }
 .r-field small { display: block; color: var(--txt3); font-size: 12px; margin-top: 6px; }
-.r-field.invalid > input, .r-field.invalid > textarea { border-color: var(--danger); }
+.r-field.invalid > input, .r-field.invalid > textarea, .r-field.invalid .r-password-wrap input { border-color: var(--danger); }
 .r-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
 
 .field-error { color: var(--danger); font-size: 12px; margin-top: 6px; min-height: 0; }
