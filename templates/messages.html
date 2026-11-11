@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>Messages | Learn2Play</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
   <style>
@@ -399,6 +400,8 @@
     let pollInterval = null;
 
     async function getCsrfToken() {
+      const meta = document.querySelector('meta[name="csrf-token"]');
+      if (meta && meta.content) return meta.content;
       const res = await fetch('/api/csrf-token', { credentials: 'same-origin' });
       const data = await res.json();
       if (!res.ok || !data.csrf_token) throw new Error('Unable to retrieve CSRF token.');

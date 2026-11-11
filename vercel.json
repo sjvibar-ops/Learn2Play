@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "rewrites": [
+    {
+      "source": "/:path*",
+      "destination": "https://learn2play.onrender.com/:path*"
+    }
+  ]
+}

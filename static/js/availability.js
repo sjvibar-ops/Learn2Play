@@ -8,7 +8,11 @@
   const unavailableList = document.getElementById("unavailableList");
   const unavailableDate = document.getElementById("unavailableDate");
   const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-  const csrf = async () => (await fetch("/api/csrf-token")).json().then(data => data.csrf_token);
+  const csrf = async () => {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    if (meta && meta.content) return meta.content;
+    return (await fetch("/api/csrf-token")).json().then(data => data.csrf_token);
+  };
   async function load() {
     try {
       const data = await fetch("/api/availability").then(r => r.json());

@@ -48,4 +48,17 @@ def create_app():
 
     register_error_handlers(app)
 
+    # Support reverse proxies (Vercel edge -> Render) by trusting the immediate
+    # proxy hop's forwarded headers for client IP, protocol, host, and port.
+    from werkzeug.middleware.proxy_fix import ProxyFix
+
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=1,
+        x_proto=1,
+        x_host=1,
+        x_port=1,
+        x_prefix=0,
+    )
+
     return app

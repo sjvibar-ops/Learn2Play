@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>Verification | Admin | Learn2Play</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
   <style>
@@ -149,6 +150,12 @@ const toast = document.getElementById('toast');
 let csrfToken = '';
 
 async function getCsrfToken() {
+  const meta = document.querySelector('meta[name="csrf-token"]');
+  if (meta && meta.content) {
+    csrfToken = meta.content;
+    return;
+  }
+
   const res = await fetch('/api/csrf-token', {
     credentials: 'same-origin'
   });

@@ -34,10 +34,16 @@
     logoutButton.addEventListener("click", async (event) => {
         event.preventDefault();
         try {
-            const tokenResponse = await fetch("/api/csrf-token", { credentials: "same-origin" });
-            const tokenData = await tokenResponse.json();
-            if (!tokenResponse.ok || !tokenData.csrf_token) {
-                throw new Error("Could not obtain the logout security token.");
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            let csrfToken = meta && meta.content ? meta.content : null;
+
+            if (!csrfToken) {
+                const tokenResponse = await fetch("/api/csrf-token", { credentials: "same-origin" });
+                const tokenData = await tokenResponse.json();
+                if (!tokenResponse.ok || !tokenData.csrf_token) {
+                    throw new Error("Could not obtain the logout security token.");
+                }
+                csrfToken = tokenData.csrf_token;
             }
 
             const logoutResponse = await fetch("/api/auth/logout", {
@@ -45,7 +51,7 @@
                 credentials: "same-origin",
                 headers: {
                     Accept: "application/json",
-                    "X-CSRFToken": tokenData.csrf_token
+                    "X-CSRFToken": csrfToken
                 }
             });
             if (!logoutResponse.ok) throw new Error("Logout request was rejected.");

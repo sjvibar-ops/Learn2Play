@@ -224,15 +224,21 @@ window.L2 = { user, getMode: () => activeMode, setMode };
         logout.addEventListener("click", async (event) => {
             event.preventDefault();
             try {
-                const tokenResponse = await fetch("/api/csrf-token", { credentials: "same-origin" });
-                const tokenData = await tokenResponse.json();
+                const meta = document.querySelector('meta[name="csrf-token"]');
+                let csrfToken = meta && meta.content ? meta.content : null;
+
+                if (!csrfToken) {
+                    const tokenResponse = await fetch("/api/csrf-token", { credentials: "same-origin" });
+                    const tokenData = await tokenResponse.json();
+                    csrfToken = tokenData.csrf_token || "";
+                }
 
                 const logoutResponse = await fetch("/api/auth/logout", {
                     method: "POST",
                     credentials: "same-origin",
                     headers: {
                         Accept: "application/json",
-                        "X-CSRFToken": tokenData.csrf_token || ""
+                        "X-CSRFToken": csrfToken
                     }
                 });
 

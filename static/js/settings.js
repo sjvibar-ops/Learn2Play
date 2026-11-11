@@ -2,6 +2,17 @@
 
 let currentSettingsAccount = null;
 
+async function getCsrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    if (meta && meta.content) return meta.content;
+    const resp = await fetch("/api/csrf-token", { credentials: "same-origin" });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.csrf_token) {
+        throw new Error("Could not prepare secure request.");
+    }
+    return data.csrf_token;
+}
+
 // ---------- Helper: Show Toast Notification ----------
 function showSettingsToast(message, isError = false) {
     const toast = document.getElementById("settingsToast");
@@ -148,11 +159,7 @@ if (profileForm) {
         if (message) message.textContent = "";
 
         try {
-            const csrfResponse = await fetch("/api/csrf-token", { credentials: "same-origin" });
-            const csrfData = await csrfResponse.json();
-            if (!csrfResponse.ok || !csrfData.csrf_token) {
-                throw new Error("Could not prepare profile update session.");
-            }
+            const csrfToken = await getCsrfToken();
 
             const fullName = [firstName, lastName].filter(Boolean).join(" ");
             const response = await fetch("/api/profile", {
@@ -161,7 +168,7 @@ if (profileForm) {
                 headers: {
                     "Content-Type": "application/json",
                     Accept: "application/json",
-                    "X-CSRFToken": csrfData.csrf_token
+                    "X-CSRFToken": csrfToken
                 },
                 body: JSON.stringify({
                     name: fullName,
@@ -253,11 +260,7 @@ if (passwordForm) {
         if (message) message.textContent = "";
 
         try {
-            const csrfResponse = await fetch("/api/csrf-token", { credentials: "same-origin" });
-            const csrfData = await csrfResponse.json();
-            if (!csrfResponse.ok || !csrfData.csrf_token) {
-                throw new Error("Could not prepare password update.");
-            }
+            const csrfToken = await getCsrfToken();
 
             const response = await fetch("/api/account/password", {
                 method: "POST",
@@ -265,7 +268,7 @@ if (passwordForm) {
                 headers: {
                     "Content-Type": "application/json",
                     Accept: "application/json",
-                    "X-CSRFToken": csrfData.csrf_token
+                    "X-CSRFToken": csrfToken
                 },
                 body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
             });

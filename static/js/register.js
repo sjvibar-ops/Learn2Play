@@ -175,6 +175,9 @@
   // ---------- submit ----------
   
   async function csrf() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    if (meta && meta.content) return meta.content;
+
     const r = await fetch("/api/csrf-token", { credentials: "same-origin", headers: { Accept: "application/json" } });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.csrf_token) throw new Error("Couldn't start a secure request. Reload the page and try again.");

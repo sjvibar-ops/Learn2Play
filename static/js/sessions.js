@@ -89,14 +89,20 @@
         logoutBtn.addEventListener("click", async (e) => {
             e.preventDefault();
             try {
-                const tokenResp = await fetch("/api/csrf-token", { credentials: "same-origin" });
-                const tokenData = await tokenResp.json();
+                const meta = document.querySelector('meta[name="csrf-token"]');
+                let csrfToken = meta && meta.content ? meta.content : null;
+
+                if (!csrfToken) {
+                    const tokenResp = await fetch("/api/csrf-token", { credentials: "same-origin" });
+                    const tokenData = await tokenResp.json();
+                    csrfToken = tokenData.csrf_token || "";
+                }
 
                 const logoutResponse = await fetch("/api/auth/logout", {
                     method: "POST",
                     credentials: "same-origin",
                     headers: {
-                        "X-CSRFToken": tokenData.csrf_token || "",
+                        "X-CSRFToken": csrfToken,
                         Accept: "application/json"
                     }
                 });
@@ -146,7 +152,8 @@
                 if (!data.ok) throw new Error(data.message);
                 window.location.assign(data.url); return;
             }
-            const token = await fetch("/api/csrf-token").then(r => r.json()).then(d => d.csrf_token);
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            const token = meta && meta.content ? meta.content : await fetch("/api/csrf-token").then(r => r.json()).then(d => d.csrf_token);
             const kind = action.classList.contains("cancel-booking") ? "cancel" : action.dataset.action;
             const result = await fetch(`/api/bookings/${action.dataset.id}/${kind}`, {method:"POST", headers:{"X-CSRFToken":token}}).then(r => r.json());
             if (!result.ok) throw new Error(result.message || "Could not update booking.");

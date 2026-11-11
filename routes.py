@@ -1,6 +1,7 @@
 import os
 import re
 import secrets
+import urllib.parse
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -121,6 +122,16 @@ CREDENTIAL_MIME_TYPES = {
     "jpg": "image/jpeg",
     "jpeg": "image/jpeg",
     "png": "image/png",
+}
+
+AVATARS_BUCKET = "avatars"
+MAX_AVATAR_BYTES = 2 * 1024 * 1024
+AVATAR_ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
+AVATAR_MIME_TYPES = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
 }
 
 
@@ -256,6 +267,110 @@ def cleanup_credential_objects(object_paths):
         current_app.logger.exception("Failed to clean up credential objects in Storage")
 
 
+def avatars_bucket():
+    supabase_url = os.environ.get("SUPABASE_URL")
+    service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    if not supabase_url or not service_role_key:
+        raise RuntimeError("Supabase Storage credentials are not configured.")
+
+    client = create_client(supabase_url, service_role_key)
+    return client.storage.from_(AVATARS_BUCKET)
+
+
+def cleanup_avatar_object(object_path):
+    if not object_path:
+        return
+    try:
+        avatars_bucket().remove([object_path])
+    except Exception:
+        current_app.logger.exception("Failed to remove avatar object from Supabase Storage: %s", object_path)
+
+
+def extract_supabase_avatar_path(url, user_id):
+    """
+    Safely extracts and validates the object path from a Supabase avatar public URL.
+    Ensures the URL belongs to this application's Supabase instance, the 'avatars' bucket,
+    and specifically the user's directory: 'user_<user_id>/<filename>'.
+    Returns None if the URL is local, external, from another bucket, or from another user.
+    """
+    if not url or not isinstance(url, str):
+        return None
+
+    try:
+        parsed = urllib.parse.urlparse(url)
+
+        supabase_url = os.environ.get("SUPABASE_URL")
+        if supabase_url:
+            expected_host = urllib.parse.urlparse(supabase_url).netloc.lower()
+            if parsed.netloc and parsed.netloc.lower() != expected_host:
+                return None
+        elif parsed.netloc and not parsed.netloc.lower().endswith(".supabase.co"):
+            return None
+
+        expected_prefix = f"/storage/v1/object/public/{AVATARS_BUCKET}/"
+        if not parsed.path.startswith(expected_prefix):
+            return None
+
+        object_path = parsed.path[len(expected_prefix):].lstrip("/")
+        expected_user_prefix = f"user_{user_id}/"
+        if not object_path.startswith(expected_user_prefix):
+            return None
+
+        filename = object_path[len(expected_user_prefix):]
+        if not filename or "/" in filename or "\\" in filename or ".." in filename:
+            return None
+
+        return object_path
+    except Exception:
+        return None
+
+
+def validate_avatar_file(file):
+    """
+    Validates uploaded avatar file:
+    - Must be provided with a valid filename
+    - Extension must be in {jpg, jpeg, png, webp}
+    - Non-empty and at most MAX_AVATAR_BYTES (2 MB)
+    - Magic bytes match the declared image extension
+    Returns: (ext, size, error_message)
+    """
+    if not file or not getattr(file, "filename", None):
+        return None, None, "Please select an image."
+
+    name = secure_filename(file.filename or "")
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in AVATAR_ALLOWED_EXTENSIONS:
+        return None, None, "Only JPG, PNG, and WebP images are allowed."
+
+    try:
+        stream = file.stream
+        header = stream.read(16)
+        stream.seek(0, os.SEEK_END)
+        size = stream.tell()
+        stream.seek(0)
+    except Exception:
+        return None, None, "Failed to read image file."
+
+    if size == 0:
+        return None, None, "The selected image file is empty."
+
+    if size > MAX_AVATAR_BYTES:
+        return None, None, "Image file must not exceed 2 MB."
+
+    is_valid = False
+    if ext in ("jpg", "jpeg"):
+        is_valid = header.startswith(b"\xff\xd8\xff")
+    elif ext == "png":
+        is_valid = header.startswith(b"\x89PNG\r\n\x1a\n")
+    elif ext == "webp":
+        is_valid = len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WEBP"
+
+    if not is_valid:
+        return None, None, f'File does not appear to be a valid {ext.upper()} image.'
+
+    return ext, size, None
+
+
 def check_upload(file):
     name = secure_filename(file.filename or "")
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
@@ -278,7 +393,12 @@ def check_upload(file):
     return ext, None
 
 
-# ---------- Static & Auth Pages ----------
+# ---------- Health Check & Static Pages ----------
+@main.route("/healthz", methods=["GET"])
+def healthz():
+    return jsonify({"status": "ok"}), 200
+
+
 @main.route("/")
 def home():
     if current_user.is_authenticated:
@@ -682,35 +802,57 @@ def upload_avatar():
         return error("No image file provided.")
 
     file = request.files["avatar"]
-    if not file or not file.filename:
-        return error("Please select an image.")
+    ext, size, val_err = validate_avatar_file(file)
+    if val_err:
+        return error(val_err)
 
-    allowed = {"jpg", "jpeg", "png", "webp"}
-    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-    if ext not in allowed:
-        return error("Only JPG, PNG, and WebP images are allowed.")
+    stored_filename = f"{uuid.uuid4().hex[:16]}.{ext}"
+    stored_path = f"user_{current_user.id}/{stored_filename}"
+    mime_type = AVATAR_MIME_TYPES[ext]
+    old_avatar_url = current_user.profile_picture
 
+    # 1. Upload new image first
     try:
-        upload_dir = Path(current_app.static_folder) / "uploads" / "avatars"
-        upload_dir.mkdir(parents=True, exist_ok=True)
+        bucket = avatars_bucket()
+        file.seek(0)
+        file_bytes = file.read()
+        bucket.upload(
+            path=stored_path,
+            file=file_bytes,
+            file_options={
+                "content-type": mime_type,
+                "upsert": "false",
+            },
+        )
+        public_url = bucket.get_public_url(stored_path)
+    except Exception as e:
+        current_app.logger.exception("Supabase avatar upload failed")
+        err_str = str(e).lower()
+        if "bucket not found" in err_str or "not found" in err_str:
+            return error("Avatar storage bucket is not available. Please ensure the 'avatars' bucket is created in Supabase.", 503)
+        return error("Failed to upload avatar image to storage. Please try again.", 503)
 
-        filename = f"user_{current_user.id}_{uuid.uuid4().hex[:8]}.{ext}"
-        filepath = upload_dir / filename
-        file.save(filepath)
-
-        avatar_url = url_for("static", filename=f"uploads/avatars/{filename}")
-        current_user.profile_picture = avatar_url
+    # 2. Update current_user.profile_picture and commit DB
+    try:
+        current_user.profile_picture = public_url
         db.session.commit()
-
-        return jsonify({
-            "ok": True,
-            "message": "Avatar uploaded successfully.",
-            "profile_picture": avatar_url,
-        })
     except Exception:
+        # 3. If DB commit fails, rollback and remove new object from Supabase to prevent orphans
         db.session.rollback()
-        current_app.logger.exception("Avatar upload failed")
-        return error("Failed to save avatar image.", 500)
+        current_app.logger.exception("Database commit failed after avatar upload; removing uploaded object")
+        cleanup_avatar_object(stored_path)
+        return error("Failed to update profile picture in database.", 500)
+
+    # 4. Only after successful DB commit, attempt cleanup of previous Supabase avatar
+    old_path_to_clean = extract_supabase_avatar_path(old_avatar_url, current_user.id)
+    if old_path_to_clean and old_path_to_clean != stored_path:
+        cleanup_avatar_object(old_path_to_clean)
+
+    return jsonify({
+        "ok": True,
+        "message": "Avatar uploaded successfully.",
+        "profile_picture": public_url,
+    })
 
 
 @main.route("/api/account/password", methods=["POST"])

@@ -2,11 +2,27 @@ services:
   - type: web
     name: learn2play
     runtime: python
+    region: singapore
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
-    healthCheckPath: /auth
+    startCommand: gunicorn -w 2 --timeout 60 -b 0.0.0.0:$PORT wsgi:app
+    healthCheckPath: /healthz
     envVars:
+      - key: APP_ENV
+        value: production
+      - key: PYTHON_VERSION
+        value: 3.12.10
       - key: DATABASE_URL
         sync: false
       - key: SECRET_KEY
-        generateValue: true
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: JAAS_APP_ID
+        sync: false
+      - key: JAAS_API_KEY_ID
+        sync: false
+      - key: JAAS_PRIVATE_KEY
+        sync: false

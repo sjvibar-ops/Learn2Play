@@ -15,6 +15,9 @@
 
   // ---------- helpers ----------
   async function getCsrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    if (meta && meta.content) return meta.content;
+
     const response = await fetch("/api/csrf-token", {
       credentials: "same-origin",
       headers: { Accept: "application/json" },

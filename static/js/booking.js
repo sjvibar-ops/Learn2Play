@@ -35,9 +35,10 @@
     if (!payload.date || !payload.time || !payload.topic) { feedback.textContent = "Choose a date, time, and topic."; return; }
     button.disabled = true; feedback.textContent = "Sending request…";
     try {
-      const token = await fetch("/api/csrf-token").then(r => r.json());
+      const meta = document.querySelector('meta[name="csrf-token"]');
+      const csrfToken = meta && meta.content ? meta.content : await fetch("/api/csrf-token").then(r => r.json()).then(d => d.csrf_token);
       const res = await fetch("/api/bookings", {method:"POST", credentials:"same-origin",
-        headers:{"Content-Type":"application/json", "X-CSRFToken":token.csrf_token}, body:JSON.stringify(payload)});
+        headers:{"Content-Type":"application/json", "X-CSRFToken":csrfToken}, body:JSON.stringify(payload)});
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.message || "Could not send booking request.");
       feedback.textContent = "Request sent. You can track its status in My Sessions.";

@@ -3,6 +3,14 @@
 let cachedUser = null;
 let cropperInstance = null;
 
+async function getCsrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    if (meta && meta.content) return meta.content;
+    const resp = await fetch("/api/csrf-token", { credentials: "same-origin" });
+    const data = await resp.json().catch(() => ({}));
+    return data.csrf_token || "";
+}
+
 // ---------- 1. Unified User Data Loader ----------
 async function loadUserData() {
     const nameEl = document.getElementById("profileName");
@@ -280,8 +288,7 @@ function updateBioCount() {
 
         canvas.toBlob(async (blob) => {
             try {
-                const csrfResp = await fetch("/api/csrf-token", { credentials: "same-origin" });
-                const csrfData = await csrfResp.json();
+                const csrfToken = await getCsrfToken();
 
                 const formData = new FormData();
                 formData.append("avatar", blob, "avatar.jpg");
@@ -290,7 +297,7 @@ function updateBioCount() {
                     method: "POST",
                     credentials: "same-origin",
                     headers: {
-                        "X-CSRFToken": csrfData.csrf_token
+                        "X-CSRFToken": csrfToken
                     },
                     body: formData
                 });
@@ -400,8 +407,7 @@ function updateBioCount() {
         }
 
         try {
-            const tokenResp = await fetch("/api/csrf-token", { credentials: "same-origin" });
-            const tokenData = await tokenResp.json();
+            const csrfToken = await getCsrfToken();
 
             const response = await fetch("/api/profile", {
                 method: "POST",
@@ -409,7 +415,7 @@ function updateBioCount() {
                 headers: {
                     "Content-Type": "application/json",
                     Accept: "application/json",
-                    "X-CSRFToken": tokenData.csrf_token
+                    "X-CSRFToken": csrfToken
                 },
                 body: JSON.stringify(payload)
             });
@@ -477,14 +483,13 @@ function updateBioCount() {
         logoutBtn.addEventListener("click", async (e) => {
             e.preventDefault();
             try {
-                const tokenResp = await fetch("/api/csrf-token", { credentials: "same-origin" });
-                const tokenData = await tokenResp.json();
+                const csrfToken = await getCsrfToken();
 
                 const logoutResponse = await fetch("/api/auth/logout", {
                     method: "POST",
                     credentials: "same-origin",
                     headers: {
-                        "X-CSRFToken": tokenData.csrf_token || "",
+                        "X-CSRFToken": csrfToken,
                         Accept: "application/json"
                     }
                 });
