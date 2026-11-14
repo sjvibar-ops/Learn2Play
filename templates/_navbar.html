@@ -18,9 +18,10 @@
   {% else %}
   <!-- ===== REGULAR USER NAVBAR ===== -->
   <nav class="tb-nav" aria-label="Main navigation">
-    <a href="{{ url_for('main.dashboard') }}"  {% if active_page == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
+    <a href="{{ url_for('main.dashboard') }}" {% if active_page == 'dashboard' and request.args.get('view') != 'browse' %}class="active"{% endif %}>Dashboard</a>
+    <a href="{{ url_for('main.dashboard', view='browse') }}" {% if active_page == 'dashboard' and request.args.get('view') == 'browse' %}class="active"{% endif %}>Browse educators</a>
     {% if current_user.is_authenticated and ('mentor' in current_user.roles or 'coach' in current_user.roles) %}
-      <a href="{{ url_for('main.schedule') }}" {% if active_page == 'schedule' %}class="active"{% endif %}>Schedule</a>
+      <a data-show-for="mentor coach" href="{{ url_for('main.schedule') }}" {% if active_page == 'schedule' %}class="active"{% endif %}>Schedule</a>
     {% endif %}
     <a href="{{ url_for('main.sessions') }}"  {% if active_page == 'sessions' %}class="active"{% endif %}>My Sessions</a>
     {% if current_user.is_authenticated %}
@@ -30,10 +31,18 @@
     <a href="{{ url_for('main.settings') }}"  {% if active_page == 'settings' %}class="active"{% endif %}>Settings</a>
     <a href="{{ url_for('main.help') }}"      {% if active_page == 'help' %}class="active"{% endif %}>Help</a>
   </nav>
+  <script src="{{ url_for('static', filename='js/modes.js') }}" defer></script>
   {% endif %}
 
   <!-- ===== Profile Dropdown (shared by both navbars) ===== -->
   <div class="tb-right">
+    {% if not (current_user.is_authenticated and current_user.is_admin) %}
+    <div class="mode-switch hidden" id="modeSwitch" role="group" aria-label="Switch account mode">
+      <button class="mode-btn" type="button" data-mode="student" aria-pressed="false">Learning</button>
+      <button class="mode-btn" type="button" data-mode="mentor" aria-pressed="false">Teaching</button>
+      <button class="mode-btn" type="button" data-mode="coach" aria-pressed="false">Coaching</button>
+    </div>
+    {% endif %}
     <div class="tb-profile" id="profileMenu">
       <button class="tb-avatar" id="userAvatar" type="button"
               aria-haspopup="menu" aria-expanded="false" aria-controls="profileDropdown">
@@ -75,7 +84,7 @@
           <!-- Regular user dropdown items -->
           <a class="dd-item" role="menuitem" href="{{ url_for('main.profile') }}">View profile</a>
           {% if current_user.is_authenticated and ('mentor' in current_user.roles or 'coach' in current_user.roles) %}
-            <a class="dd-item" role="menuitem" href="{{ url_for('main.schedule') }}">Teaching Schedule</a>
+            <a class="dd-item" data-show-for="mentor coach" role="menuitem" href="{{ url_for('main.schedule') }}">Teaching Schedule</a>
           {% endif %}
           <a class="dd-item" role="menuitem" href="{{ url_for('main.sessions') }}">My Sessions</a>
           {% if current_user.is_authenticated %}

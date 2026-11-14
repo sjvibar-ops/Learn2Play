@@ -11,11 +11,12 @@
 /* ---------- storage helpers (localStorage can throw, e.g. private mode) ---------- */
 const store = {
   get(key)        { try { return localStorage.getItem(key); } catch (e) { return null; } },
-  set(key, value) { try { localStorage.setItem(key, value); } catch (e) { /* ignore */ } },
+  set(key, value) { try { localStorage.setItem(key, value); return true; } catch (e) { return false; } },
   remove(key)     { try { localStorage.removeItem(key); } catch (e) { /* ignore */ } },
 };
 
-const KEYS = { user: "l2_user", mode: "l2_activeMode" };
+const KEYS = { user: "l2_user" };
+const VALID_USER_ROLES = new Set(["student", "mentor", "coach"]);
 
 function esc(value) {
   return String(value || "")
@@ -27,15 +28,7 @@ function esc(value) {
 }
 
 
-/* ============================================================
-   PART 1 — user, roles and modes
-   ============================================================ */
-const MODES = {
-  student: { label: "Learning" },
-  mentor:  { label: "Mentoring" },
-  coach:   { label: "Coaching" },
-};
-
+/* ---------- logged-in user cache ---------- */
 function getUser() {
   let user = null;
   try { user = JSON.parse(store.get(KEYS.user)); } catch (e) { /* ignore bad data */ }
@@ -44,64 +37,182 @@ function getUser() {
     user = { name: "User", email: "", roles: ["student"] };
   }
 
-  user.roles = (user.roles || []).filter((r) => MODES[r]);
+  user.roles = (user.roles || []).filter((r) => VALID_USER_ROLES.has(r));
   if (user.roles.length === 0) user.roles = ["student"];
 
   return user;
 }
 
 const user = getUser();
-const availableModes = user.roles;
-
-function pickInitialMode() {
-  const saved = store.get(KEYS.mode);
-  return availableModes.includes(saved) ? saved : availableModes[0];
-}
-
-let activeMode = pickInitialMode();
-
-function applyMode() {
-  document.querySelectorAll("[data-show-for]").forEach((el) => {
-    const modes = el.dataset.showFor.split(/\s+/);
-    el.classList.toggle("hidden", !modes.includes(activeMode));
-  });
-
-  const switcher = document.getElementById("modeSwitch");
-  if (switcher) {
-    switcher.classList.toggle("hidden", availableModes.length < 2);
-    switcher.querySelectorAll(".mode-btn").forEach((btn) => {
-      const mode = btn.dataset.mode;
-      const isActive = mode === activeMode;
-      btn.classList.toggle("hidden", !availableModes.includes(mode));
-      btn.classList.toggle("active", isActive);
-      btn.setAttribute("aria-pressed", String(isActive));
-    });
-  }
-}
-
-function setMode(mode) {
-  if (!availableModes.includes(mode) || mode === activeMode) return;
-  activeMode = mode;
-  store.set(KEYS.mode, mode);
-  applyMode();
-  document.dispatchEvent(new CustomEvent("l2:modechange", { detail: { mode } }));
-}
-
-const modeSwitch = document.getElementById("modeSwitch");
-if (modeSwitch) {
-  modeSwitch.addEventListener("click", (e) => {
-    const btn = e.target.closest(".mode-btn");
-    if (btn) setMode(btn.dataset.mode);
-  });
-}
-
 const signupCta = document.querySelector(".side-cta");
 if (signupCta) signupCta.classList.add("hidden");
 
-applyMode();
+/* ---------- Dashboard views and browser-only XP tracker ---------- */
+const dashboardView = new URLSearchParams(window.location.search).get("view") === "browse" ? "browse" : "progress";
+document.body.dataset.dashboardView = dashboardView;
+const gamificationPreview = document.getElementById("gamificationPreview");
+const browseSections = document.querySelectorAll(".dashboard-search-hero, .tutor-grid-section");
+gamificationPreview?.classList.toggle("hidden", dashboardView !== "progress");
+browseSections.forEach((section) => section.classList.toggle("hidden", dashboardView !== "browse"));
+document.querySelectorAll("[data-dashboard-browse]").forEach((section) => {
+  section.classList.toggle("hidden", dashboardView !== "browse");
+});
 
-window.L2 = { user, getMode: () => activeMode, setMode };
+if (gamificationPreview) {
+  const progressKey = `l2_gamification_${String(document.body.dataset.accountId || user.id || user.email || "local").toLowerCase()}`;
+  const levelSteps = [
+    { level: 1, name: "Beginner", at: 0 },
+    { level: 2, name: "Learner", at: 100 },
+    { level: 3, name: "Competitor", at: 250 },
+    { level: 4, name: "Achiever", at: 500 },
+    { level: 5, name: "Elite Student Gamer", at: 1000 },
+  ];
 
+  function emptyProgress() {
+    return { academicXp: 0, gamingXp: 0, activities: [] };
+  }
+  function readProgress() {
+    try {
+      const saved = JSON.parse(store.get(progressKey));
+      if (saved && Number.isFinite(saved.academicXp) && Number.isFinite(saved.gamingXp) && Array.isArray(saved.activities)) {
+        return saved;
+      }
+    } catch (e) { /* start fresh if browser data is invalid */ }
+    return emptyProgress();
+  }
+  let progress = readProgress();
+
+  function saveProgress() {
+    return store.set(progressKey, JSON.stringify(progress));
+  }
+  function weekStart(date) {
+    const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+    monday.setHours(0, 0, 0, 0);
+    return monday;
+  }
+  function sameWeek(a, b) {
+    return weekStart(a).getTime() === weekStart(b).getTime();
+  }
+  function updateProgress() {
+    const total = progress.academicXp + progress.gamingXp;
+    const currentLevel = [...levelSteps].reverse().find((item) => total >= item.at) || levelSteps[0];
+    const nextLevel = levelSteps.find((item) => item.at > total);
+    const rangeStart = currentLevel.at;
+    const rangeEnd = nextLevel ? nextLevel.at : rangeStart + 500;
+    const levelPercent = Math.max(0, Math.min(100, ((total - rangeStart) / (rangeEnd - rangeStart)) * 100));
+    document.getElementById("gpTotalXp").textContent = total;
+    document.getElementById("gpAcademicXp").textContent = progress.academicXp;
+    document.getElementById("gpGamingXp").textContent = progress.gamingXp;
+    document.getElementById("gpLevelName").textContent = `Level ${currentLevel.level} · ${currentLevel.name}`;
+    document.getElementById("gpNextLevel").textContent = nextLevel ? `${nextLevel.at - total} XP to Level ${nextLevel.level}` : "Top level reached · keep earning XP";
+    const levelBar = document.getElementById("gpLevelBar");
+    levelBar.style.width = `${levelPercent}%`;
+    const levelProgress = document.getElementById("gpLevelProgress");
+    levelProgress.setAttribute("aria-valuenow", String(Math.round(levelPercent)));
+    levelProgress.setAttribute("aria-valuetext", nextLevel ? `${total - rangeStart} of ${rangeEnd - rangeStart} XP to next level` : `${total} XP, top level`);
+    document.getElementById("gpAcademicBar").style.width = `${Math.min(100, progress.academicXp % 100)}%`;
+    document.getElementById("gpGamingBar").style.width = `${Math.min(100, progress.gamingXp % 100)}%`;
+
+    const academicCount = progress.activities.filter((item) => item.path === "academic").length;
+    const gamingCount = progress.activities.filter((item) => item.path === "gaming").length;
+    const now = new Date();
+    const thisWeekActivities = progress.activities.filter((item) => sameWeek(new Date(item.at), now));
+    const hasAcademic = thisWeekActivities.some((item) => item.path === "academic");
+    const hasGaming = thisWeekActivities.some((item) => item.path === "gaming");
+    const questValues = [
+      { count: Math.min(academicCount, 3), total: 3, label: `${Math.min(academicCount, 3)} of 3` },
+      { count: Math.min(gamingCount, 2), total: 2, label: `${Math.min(gamingCount, 2)} of 2` },
+      { count: Number(hasAcademic) + Number(hasGaming), total: 2, label: `${Number(hasAcademic) + Number(hasGaming)} of 2 this week` },
+      { count: Math.min(total, 100), total: 100, label: `${total} of 100 XP` },
+    ];
+    gamificationPreview.querySelectorAll("[data-quest-kind]").forEach((quest, index) => {
+      const item = questValues[index];
+      quest.querySelector("[data-quest-count]").textContent = item.label;
+      quest.querySelector("[data-quest-bar]").style.width = `${Math.min(100, (item.count / item.total) * 100)}%`;
+      quest.classList.toggle("gp-quest-done", item.count >= item.total);
+    });
+
+    const monday = weekStart(now);
+    gamificationPreview.querySelectorAll("[data-weekday]").forEach((day) => {
+      const date = new Date(monday);
+      date.setDate(date.getDate() + Number(day.dataset.weekday));
+      const dayItems = progress.activities.filter((item) => {
+        const activityDate = new Date(item.at);
+        return activityDate.getFullYear() === date.getFullYear()
+          && activityDate.getMonth() === date.getMonth()
+          && activityDate.getDate() === date.getDate();
+      });
+      const dailyAcademic = dayItems.some((item) => item.path === "academic");
+      const dailyGaming = dayItems.some((item) => item.path === "gaming");
+      const both = dailyAcademic && dailyGaming;
+      day.classList.toggle("both", both);
+      day.classList.toggle("one", !both && (dailyAcademic || dailyGaming));
+      day.querySelector("b").textContent = both ? "✓" : dailyAcademic || dailyGaming ? "•" : "·";
+    });
+    let streak = 0;
+    let cursor = weekStart(now);
+    while (true) {
+      const weekItems = progress.activities.filter((item) => sameWeek(new Date(item.at), cursor));
+      if (!weekItems.some((item) => item.path === "academic") || !weekItems.some((item) => item.path === "gaming")) break;
+      streak += 1;
+      cursor.setDate(cursor.getDate() - 7);
+    }
+    document.getElementById("gpStreakCount").textContent = `${streak} ${streak === 1 ? "week" : "weeks"}`;
+    ["academic", "gaming", "combined"].forEach((badge) => {
+      const unlocked = badge === "academic" ? academicCount > 0 : badge === "gaming" ? gamingCount > 0 : academicCount > 0 && gamingCount > 0;
+      gamificationPreview.querySelector(`[data-badge="${badge}"]`).classList.toggle("earned", unlocked);
+    });
+  }
+
+  gamificationPreview.querySelectorAll("[data-quest-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const filter = button.dataset.questFilter;
+      gamificationPreview.querySelectorAll("[data-quest-filter]").forEach((item) => {
+        const selected = item === button;
+        item.classList.toggle("active", selected);
+        item.setAttribute("aria-pressed", String(selected));
+      });
+      gamificationPreview.querySelectorAll("[data-quest-kind]").forEach((card) => {
+        card.classList.toggle("hidden", filter !== "all" && card.dataset.questKind !== filter);
+      });
+    });
+  });
+
+  const activityDialog = document.getElementById("gpActivityDialog");
+  const openActivityButton = document.getElementById("gpOpenActivity");
+  const closeActivityButton = document.getElementById("gpCloseActivity");
+  openActivityButton.addEventListener("click", () => activityDialog.showModal());
+  closeActivityButton.addEventListener("click", () => activityDialog.close());
+  activityDialog.addEventListener("click", (event) => {
+    if (event.target === activityDialog) activityDialog.close();
+  });
+
+  gamificationPreview.querySelectorAll("[data-xp-path]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const path = button.dataset.xpPath;
+      const amount = Number(button.dataset.xpAmount);
+      progress[`${path}Xp`] += amount;
+      progress.activities.push({ path, amount, label: button.dataset.xpLabel, at: new Date().toISOString() });
+      progress.activities = progress.activities.slice(-500);
+      const saved = saveProgress();
+      updateProgress();
+      const feedback = document.getElementById("gpActivityFeedback");
+      feedback.textContent = saved === false
+        ? `+${amount} XP added for this visit. Browser storage is unavailable, so progress may not persist.`
+        : `+${amount} ${path === "academic" ? "Academic" : "Gaming"} XP added. Saved in this browser only.`;
+    });
+  });
+
+  document.getElementById("gpResetProgress").addEventListener("click", () => {
+    if (!window.confirm("Reset this browser's Learn2Play XP and activity history?")) return;
+    progress = emptyProgress();
+    store.remove(progressKey);
+    updateProgress();
+    document.getElementById("gpActivityFeedback").textContent = "Local progress reset. Your real Learn2Play account was not changed.";
+  });
+  updateProgress();
+}
 
 /* ============================================================
    PART 2 — profile dropdown and real logged-in user
@@ -144,7 +255,7 @@ window.L2 = { user, getMode: () => activeMode, setMode };
 
     function displayUser(account) {
         const name = account.name || "User";
-        const roles = (account.roles || []).filter(role => Object.hasOwn(MODES, role));
+        const roles = (account.roles || []).filter(role => VALID_USER_ROLES.has(role));
 
         const initials = name
             .trim()
@@ -199,15 +310,11 @@ window.L2 = { user, getMode: () => activeMode, setMode };
             const account = data.user;
             user.name = account.name || "User";
             user.email = account.email || "";
-            user.roles.splice(0, user.roles.length, ...(account.roles || []).filter(role => Object.hasOwn(MODES, role)));
+            user.roles.splice(0, user.roles.length, ...(account.roles || []).filter(role => VALID_USER_ROLES.has(role)));
 
             if (user.roles.length === 0) user.roles.push("student");
 
             store.set(KEYS.user, JSON.stringify(user));
-            if (!user.roles.includes(activeMode)) activeMode = user.roles[0];
-
-            store.set(KEYS.mode, activeMode);
-            applyMode();
             displayUser(user);
 
         } catch (error) {
@@ -248,7 +355,6 @@ window.L2 = { user, getMode: () => activeMode, setMode };
                 }
 
                 store.remove(KEYS.user);
-                store.remove(KEYS.mode);
                 window.location.href = "/auth";
             } catch (error) {
                 window.alert(error.message || "Logout could not be completed. Please try again.");
@@ -264,12 +370,14 @@ window.L2 = { user, getMode: () => activeMode, setMode };
 (function () {
   const grid = document.getElementById("tutorGrid");
   const emptyState = document.getElementById("emptyState");
+  const emptyTitle = document.getElementById("emptyStateTitle");
   const emptyMsg = document.getElementById("emptyStateMsg");
   const searchInput = document.getElementById("searchInput");
 
   if (!grid) return; // not on dashboard
 
   let TUTORS = []; // loaded from /api/tutors
+  let loadError = false;
 
   const AVATAR_GRADS = [
     ["#7c6cf5", "#f472b6"], ["#60a5fa", "#34d399"], ["#fbbf24", "#f472b6"],
@@ -467,10 +575,19 @@ updateSidebarSchedule(null, null);
       grid.innerHTML = "";
       if (emptyState) {
         emptyState.classList.remove("hidden");
+        if (emptyTitle) {
+          emptyTitle.textContent = loadError
+            ? "Educators couldn't be loaded"
+            : TUTORS.length === 0
+              ? "No educators yet"
+              : "No matching educators";
+        }
         if (emptyMsg) {
-          emptyMsg.textContent = TUTORS.length === 0
-            ? "No registered tutors or coaches yet. Once verified educators register in Naga City, they will appear here!"
-            : "No tutors match your search — try a different subject or keyword.";
+          emptyMsg.textContent = loadError
+            ? "Please check your connection and try again."
+            : TUTORS.length === 0
+              ? "There are currently no registered tutors or coaches. Verified educators will appear here when they join Learn2Play."
+              : "No educators match these filters. Try a different category or search term.";
         }
       }
       return;
@@ -527,14 +644,17 @@ updateSidebarSchedule(null, null);
       if (!res.ok) throw new Error("Could not load educators.");
 
       const data = await res.json();
-      TUTORS = data.tutors || [];
+      if (!data.ok || !Array.isArray(data.tutors)) throw new Error("The educator list could not be read.");
+      TUTORS = data.tutors;
+      loadError = false;
       render();
     } catch (e) {
       console.warn("Could not fetch tutors:", e.message);
       TUTORS = [];
+      loadError = true;
       render();
     }
   }
 
-  loadTutorsFromBackend();
+  if (dashboardView === "browse") loadTutorsFromBackend();
 })();

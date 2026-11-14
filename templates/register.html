@@ -17,26 +17,42 @@
     </header>
 
     <h1>Create your account</h1>
-    <p class="sub">Join as a student, a teacher, a coach, or any mix of the three.</p>
+    <p class="sub">Choose how you will participate in both paths, then activate one or both to get started.</p>
 
     <form id="regForm" novalidate enctype="multipart/form-data">
 
-      <!-- 1. Roles -->
+      <!-- 1. Paths and participation -->
       <fieldset class="reg-step roles" id="rolesField">
-        <legend><span class="step-no">1</span>I want to join as <small>(pick one or more)</small></legend>
-        <div class="role-options">
-          <label class="role">
-            <input type="checkbox" name="roles" value="student">
-            <span class="role-card"><b>Student</b><small>Learn from teachers &amp; coaches. No proof needed.</small></span>
-          </label>
-          <label class="role">
-            <input type="checkbox" name="roles" value="mentor">
-            <span class="role-card"><b>Teacher</b><small>Teach academic subjects. Credentials required.</small></span>
-          </label>
-          <label class="role">
-            <input type="checkbox" name="roles" value="coach">
-            <span class="role-card"><b>Coach</b><small>Coach gaming skills. Credentials required.</small></span>
-          </label>
+        <legend><span class="step-no">1</span>Choose roles for both paths <small>(activate one or both now)</small></legend>
+        <div class="reg-path-grid">
+          <section class="reg-path-card" id="academicPathCard">
+            <label class="reg-path-select" for="academicPath">
+              <input type="checkbox" id="academicPath" value="academic">
+              <span><b>Academic</b><small>Start using the academic path now</small></span>
+            </label>
+            <div class="reg-participation" id="academicParticipation">
+              <span class="reg-participation-label">Choose at least one role. This choice is fixed after signup.</span>
+              <label class="reg-path-option"><input type="checkbox" id="academicLearn" value="learn"><span><b>Learn</b><small>Find academic support</small></span></label>
+              <label class="reg-path-option"><input type="checkbox" id="academicTeach" value="teach"><span><b>Teach</b><small>Offer academic teaching</small></span></label>
+            </div>
+          </section>
+          <section class="reg-path-card" id="gamingPathCard">
+            <label class="reg-path-select" for="gamingPath">
+              <input type="checkbox" id="gamingPath" value="gaming">
+              <span><b>Gaming</b><small>Start using the gaming path now</small></span>
+            </label>
+            <div class="reg-participation" id="gamingParticipation">
+              <span class="reg-participation-label">Choose at least one role. This choice is fixed after signup.</span>
+              <label class="reg-path-option"><input type="checkbox" id="gamingLearn" value="learn"><span><b>Learn</b><small>Find a gaming coach</small></span></label>
+              <label class="reg-path-option"><input type="checkbox" id="gamingTeach" value="teach"><span><b>Teach</b><small>Offer gaming coaching</small></span></label>
+            </div>
+          </section>
+        </div>
+        <p class="reg-path-note">Choose Learn, Teach, or both for each path. Those roles cannot be changed after signup. A path you don’t activate now can be activated later in Settings. Choices are saved in this browser only. Teaching requires admin approval before services can be published.</p>
+        <div hidden aria-hidden="true">
+          <input type="checkbox" name="roles" value="student">
+          <input type="checkbox" name="roles" value="mentor">
+          <input type="checkbox" name="roles" value="coach">
         </div>
         <p class="field-error" data-for="roles"></p>
       </fieldset>
@@ -81,7 +97,7 @@
       <!-- 3. Credentials (teacher / coach only) -->
       <fieldset class="reg-step hidden" id="credsField">
         <legend><span class="step-no">3</span>Credentials &amp; achievements</legend>
-        <p class="step-note">Teachers and coaches are verified by an administrator before their role goes live.</p>
+        <p class="step-note" id="credentialsNote">Teaching services are reviewed by an administrator before they can be published.</p>
 
         <div class="r-field">
           <span id="proofLabel">Proof of qualifications</span>

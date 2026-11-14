@@ -83,7 +83,14 @@
 
       if (result.user) {
         try {
-          localStorage.setItem("l2_user", JSON.stringify(result.user));
+          const accountEmail = String(result.user.email || email.value).trim().toLowerCase();
+          const savedChoices = localStorage.getItem(`l2_participation_${encodeURIComponent(accountEmail)}`);
+          let registrationChoices = null;
+          try { registrationChoices = savedChoices ? JSON.parse(savedChoices) : null; } catch (e) { /* ignore damaged local preferences */ }
+          const userForFrontend = registrationChoices?.locked
+            ? { ...result.user, participation: registrationChoices.participation, participation_locked: true }
+            : result.user;
+          localStorage.setItem("l2_user", JSON.stringify(userForFrontend));
         } catch (e) {
           // The Flask session still works if localStorage is unavailable.
         }

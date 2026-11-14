@@ -18,6 +18,41 @@
   const getRoles = () =>
     [...form.querySelectorAll('input[name="roles"]:checked')].map((i) => i.value);
   const needsCreds = () => getRoles().some((r) => VERIFIED_ROLES.includes(r));
+  const paths = {
+    academic: { path: "academicPath", learn: "academicLearn", teach: "academicTeach", panel: "academicParticipation", card: "academicPathCard" },
+    gaming: { path: "gamingPath", learn: "gamingLearn", teach: "gamingTeach", panel: "gamingParticipation", card: "gamingPathCard" },
+  };
+
+  function syncPathChoices() {
+    const roles = new Set();
+    let hasLearner = false;
+    Object.values(paths).forEach((choice) => {
+      const selected = $(choice.path).checked;
+      const learning = $(choice.learn).checked;
+      const teaching = $(choice.teach).checked;
+      $(choice.card).classList.toggle("selected", selected);
+      if (learning) hasLearner = true;
+      if (teaching && choice.path === "academicPath") roles.add("mentor");
+      if (teaching && choice.path === "gamingPath") roles.add("coach");
+    });
+    if (hasLearner) roles.add("student");
+    form.querySelectorAll('input[name="roles"]').forEach((input) => {
+      input.checked = roles.has(input.value);
+    });
+  }
+
+  function getParticipationChoices() {
+    return Object.fromEntries(Object.entries(paths).map(([name, choice]) => {
+      const enabled = $(choice.path).checked;
+      return [name, {
+        enabled,
+        roles: [
+          ...($(choice.learn).checked ? ["learn"] : []),
+          ...($(choice.teach).checked ? ["teach"] : []),
+        ],
+      }];
+    }));
+  }
 
   // ---------- errors ----------
   function setError(field, message) {
@@ -61,8 +96,15 @@
     credsField.classList.toggle("hidden", !show);
     $("verificationNotice").classList.toggle("hidden", !show);
     $("reviewNo").textContent = show ? "4" : "3";
+    const teaching = getRoles().filter((role) => VERIFIED_ROLES.includes(role));
+    $("credentialsNote").textContent = teaching.length > 1
+      ? "Your academic teaching and gaming coaching applications will each be reviewed before services can be published."
+      : teaching.includes("mentor")
+        ? "Your academic teaching application will be reviewed before teaching services can be published."
+        : "Your gaming coaching application will be reviewed before coaching services can be published.";
   }
   $("rolesField").addEventListener("change", () => {
+    syncPathChoices();
     setError("roles", "");
     syncRoles();
   });
@@ -154,7 +196,15 @@
     const name = $("name").value.trim();
     const pw = $("password").value;
 
-    if (getRoles().length === 0) errs.roles = "Choose at least one role.";
+    const selectedPaths = Object.entries(paths).filter(([, choice]) => $(choice.path).checked);
+    const roleChoicesMissing = Object.values(paths).some((choice) => !$(choice.learn).checked && !$(choice.teach).checked);
+    if (selectedPaths.length === 0) {
+      errs.roles = "Choose at least one path to activate now.";
+    } else if (roleChoicesMissing) {
+      errs.roles = "Choose Learn, Teach, or both for Academic and Gaming.";
+    } else if (getRoles().length === 0) {
+      errs.roles = "Choose at least one way to participate.";
+    }
     if (name.length < 2 || name.length > 80) errs.name = "Enter your full name (2 to 80 characters).";
     if (!EMAIL_RE.test($("email").value.trim())) errs.email = "Enter a valid email address.";
     if (pw.length < 8 || !/[a-z]/.test(pw) || !/[A-Z]/.test(pw) || !/\d/.test(pw))
@@ -188,6 +238,7 @@
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     clearErrors();
+    syncPathChoices();
 
     const errors = validate();
     if (Object.keys(errors).length > 0) {
@@ -229,7 +280,7 @@
         }
         return;
       }
-      showDone(data);
+      showDone(data, getParticipationChoices(), $("email").value.trim().toLowerCase());
     } catch (err) {
       showNote(err.message || "Something went wrong. Please try again.");
     } finally {
@@ -238,20 +289,34 @@
     }
   });
 
-  function showDone(data) {
+  function showDone(data, participation, email) {
+    let choicesSaved = false;
+    try {
+      localStorage.setItem(`l2_participation_${encodeURIComponent(email)}`, JSON.stringify({
+        participation,
+        locked: true,
+        savedAt: new Date().toISOString(),
+      }));
+      choicesSaved = true;
+    } catch (e) { /* the server account still exists if browser storage is unavailable */ }
     if (data.user) {
-      try { localStorage.setItem("l2_user", JSON.stringify(data.user)); } catch (e) { /* session still works */ }
+      try {
+        localStorage.setItem("l2_user", JSON.stringify({ ...data.user, participation, participation_locked: true }));
+      } catch (e) { /* session still works */ }
     }
     form.classList.add("hidden");
     const done = $("done");
     done.classList.remove("hidden");
     $("doneTitle").textContent = data.pending ? "Registration received" : "You're all set";
-    $("doneText").textContent = data.message;
+    $("doneText").textContent = choicesSaved
+      ? `${data.message} Your path and Learn/Teach choices are saved in this browser only.`
+      : `${data.message} This browser couldn't save your path choices, so they won't be remembered here after you leave.`;
     const link = $("doneLink");
     link.href = data.redirect || "/login";
     link.textContent = data.redirect === "/dashboard" ? "Go to dashboard" : "Back to log in";
     done.focus();
   }
 
+  syncPathChoices();
   syncRoles();
 })();

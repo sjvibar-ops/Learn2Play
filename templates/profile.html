@@ -74,7 +74,9 @@
             <div class="panel-header">
                 <div>
                     <h2>Edit Your Public Profile</h2>
-                    <p>Update your photo, introduction, specialties, and hourly rates.</p>
+                    <p data-show-for="student">Update your photo, introduction, and learning interests.</p>
+                    <p data-show-for="mentor">Update your photo, introduction, academic topics, and teaching rate.</p>
+                    <p data-show-for="coach">Update your photo, introduction, games, and coaching rate.</p>
                 </div>
                 <button type="button" class="close-icon-btn" id="closeEditBtn" aria-label="Close edit form">✕</button>
             </div>
@@ -101,23 +103,23 @@
 
                 <!-- Independent Rate Controls (Requirement 3) -->
                 {% if 'mentor' in current_user.roles and 'coach' in current_user.roles %}
-                    <label class="settings-input-group">
+                    <label class="settings-input-group" data-show-for="mentor">
                         <span class="input-label">Teaching Rate (₱/hr)</span>
                         <input id="editTeachingRate" name="teaching_rate" type="number" min="0" max="50000" step="10" value="{{ current_user.teaching_rate if current_user.teaching_rate is not none else '' }}" placeholder="Leave blank if not set">
                     </label>
                 {% elif 'mentor' in current_user.roles %}
-                    <label class="settings-input-group">
+                    <label class="settings-input-group" data-show-for="mentor">
                         <span class="input-label">Teaching Hourly Rate (₱/hr)</span>
                         <input id="editTeachingRate" name="teaching_rate" type="number" min="0" max="50000" step="10" value="{{ current_user.teaching_rate if current_user.teaching_rate is not none else '' }}" placeholder="Leave blank if not set">
                     </label>
                 {% elif 'coach' in current_user.roles %}
-                    <label class="settings-input-group">
+                    <label class="settings-input-group" data-show-for="coach">
                         <span class="input-label">Coaching Hourly Rate (₱/hr)</span>
                         <input id="editCoachingRate" name="coaching_rate" type="number" min="0" max="50000" step="10" value="{{ current_user.coaching_rate if current_user.coaching_rate is not none else '' }}" placeholder="Leave blank if not set">
                     </label>
                 {% else %}
-                    <label class="settings-input-group">
-                        <span class="input-label">Topics &amp; Interests</span>
+                    <label class="settings-input-group" data-show-for="student">
+                        <span class="input-label">Learning Interests</span>
                         <input id="editTopics" name="topics" type="text" value="{{ current_user.topics | join(', ') if current_user.topics else '' }}" placeholder="e.g. Valorant, Mathematics">
                     </label>
                 {% endif %}
@@ -126,17 +128,17 @@
             <!-- Additional row for dual-role users (Teaching + Coaching) -->
             {% if 'mentor' in current_user.roles and 'coach' in current_user.roles %}
             <div class="form-grid-2" style="margin-top: 14px;">
-                <label class="settings-input-group">
+                <label class="settings-input-group" data-show-for="coach">
                     <span class="input-label">Coaching Rate (₱/hr)</span>
                     <input id="editCoachingRate" name="coaching_rate" type="number" min="0" max="50000" step="10" value="{{ current_user.coaching_rate if current_user.coaching_rate is not none else '' }}" placeholder="Leave blank if not set">
                 </label>
-                <label class="settings-input-group">
+                <label class="settings-input-group" data-show-for="student mentor coach">
                     <span class="input-label">Specialties &amp; Games</span>
                     <input id="editTopics" name="topics" type="text" value="{{ current_user.topics | join(', ') if current_user.topics else '' }}" placeholder="e.g. Calculus, Physics, Valorant, MLBB">
                 </label>
             </div>
             {% elif 'mentor' in current_user.roles or 'coach' in current_user.roles %}
-            <label class="settings-input-group" style="margin-top: 14px;">
+            <label class="settings-input-group" data-show-for="student mentor coach" style="margin-top: 14px;">
                 <span class="input-label">Specialties &amp; Games</span>
                 <input id="editTopics" name="topics" type="text" value="{{ current_user.topics | join(', ') if current_user.topics else '' }}" placeholder="e.g. Calculus, Physics, Valorant, MLBB">
                 <small class="input-hint">Separate subjects and games with commas.</small>
@@ -164,11 +166,11 @@
             <div class="left-col">
                 <!-- Hourly Rates Display Card (Requirement 3) -->
                 {% if 'mentor' in current_user.roles or 'coach' in current_user.roles %}
-                <div class="content-card" id="ratesDisplayCard">
+                <div class="content-card" id="ratesDisplayCard" data-show-for="mentor coach">
                     <h3 class="card-heading">Your Hourly Rates</h3>
                     <div class="meta-list" style="border-top: none; padding-top: 0;">
                         {% if 'mentor' in current_user.roles %}
-                        <div class="meta-row" style="justify-content: space-between;">
+                        <div class="meta-row" data-show-for="mentor" style="justify-content: space-between;">
                             <span>📚 Academic Teaching:</span>
                             <strong id="profileTeachingRate" style="color: var(--lavender); font-size: 14px;">
                                 {% if current_user.teaching_rate is not none %}
@@ -180,7 +182,7 @@
                         </div>
                         {% endif %}
                         {% if 'coach' in current_user.roles %}
-                        <div class="meta-row" style="justify-content: space-between;">
+                        <div class="meta-row" data-show-for="coach" style="justify-content: space-between;">
                             <span>🎮 Gaming Coaching:</span>
                             <strong id="profileCoachingRate" style="color: #7ceea4; font-size: 14px;">
                                 {% if current_user.coaching_rate is not none %}
@@ -224,7 +226,11 @@
 
                 <!-- Topics & Games -->
                 <div class="content-card">
-                    <h3 class="card-heading">Topics &amp; Games</h3>
+                    <h3 class="card-heading">
+                        <span data-show-for="student">Learning Interests</span>
+                        <span data-show-for="mentor">Academic Topics</span>
+                        <span data-show-for="coach">Games &amp; Coaching Specialties</span>
+                    </h3>
                     <div class="topics-tag-list" id="profileTopicsList">
                         {% if current_user.topics and current_user.topics | length > 0 %}
                             {% for topic in current_user.topics %}
@@ -240,10 +246,13 @@
                 <div class="content-card">
                     <h3 class="card-heading">Quick Navigation</h3>
                     {% if 'mentor' in current_user.roles or 'coach' in current_user.roles %}
-                    <a href="{{ url_for('main.schedule') }}" class="quick-link">
+                    <a href="{{ url_for('main.schedule') }}" class="quick-link" data-show-for="mentor coach">
                         <span class="ql-icon">📋</span>
                         <div>
-                            <strong>Teaching &amp; Coaching Schedule</strong>
+                            <strong>
+                                <span data-show-for="mentor">Academic Teaching Schedule</span>
+                                <span data-show-for="coach">Gaming Coaching Schedule</span>
+                            </strong>
                             <small>Manage your student appointments</small>
                         </div>
                     </a>
@@ -255,11 +264,11 @@
                             <small>View booked lessons</small>
                         </div>
                     </a>
-                    {% if current_user.is_admin or ('mentor' not in current_user.roles and 'coach' not in current_user.roles) %}
-                    <a href="{{ url_for('main.dashboard') }}" class="quick-link">
+                    {% if 'student' in current_user.roles %}
+                    <a href="{{ url_for('main.dashboard', view='browse') }}" class="quick-link" data-show-for="student">
                         <span class="ql-icon">🔍</span>
                         <div>
-                            <strong>Browse Mentors</strong>
+                            <strong>Browse Educators</strong>
                             <small>Find verified teachers &amp; coaches</small>
                         </div>
                     </a>

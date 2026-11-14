@@ -7,7 +7,7 @@
   <title>Dashboard | Learn2Play</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
 </head>
-<body class="dashboard">
+<body class="dashboard" data-account-id="{{ current_user.id }}">
 
   <!-- ============ Consistent Top Navbar ============ -->
 
@@ -31,7 +31,7 @@
     <!-- ============ Sidebar ============ -->
     <aside class="sidebar">
       <!-- Category filters (Browse Mode) -->
-      <div class="side-group">
+      <div class="side-group hidden" data-dashboard-browse>
         <div class="side-label">Browse Category</div>
         <button class="side-item active" data-cat="all">All Mentors</button>
         <button class="side-item" data-cat="academic">Academic Teachers</button>
@@ -102,9 +102,159 @@
     <!-- Main Content -->
     <main class="content">
 
+      <section class="gamification-preview" id="gamificationPreview" aria-labelledby="gamificationTitle">
+        <div class="gp-disclaimer" role="note">
+          <strong>Local progress tracker.</strong>
+          XP is saved in this browser only. Activities are self-reported, unverified, and not redeemable.
+        </div>
+
+        <div class="gp-heading">
+          <div>
+            <span class="gp-eyebrow">Your progress hub</span>
+            <h1 id="gamificationTitle">Grow in both worlds.</h1>
+            <p>Study goals and gaming goals move your overall Learn2Play journey forward.</p>
+          </div>
+          <div class="gp-heading-actions">
+            <button class="gp-secondary-action" type="button" id="gpOpenActivity">Log activity <span aria-hidden="true">＋</span></button>
+            <a class="gp-primary-link" href="#gpRewards">Explore rewards <span aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+
+        <div class="gp-overview" aria-label="Your local progress overview">
+          <article class="gp-card gp-level-card">
+            <div class="gp-card-heading">
+              <h2>Overall Learn2Play level</h2>
+              <span class="gp-muted">Academic + Gaming XP</span>
+            </div>
+            <div class="gp-level-name">
+              <span class="gp-level-mark" aria-hidden="true">✦</span>
+              <div><strong id="gpLevelName">Level 1 · Beginner</strong><small id="gpNextLevel">Start earning XP to reach the next level</small></div>
+            </div>
+            <div class="gp-progress-label"><span>Overall XP</span><strong><span id="gpTotalXp">0</span> XP</strong></div>
+            <div class="gp-progress-track" role="progressbar" id="gpLevelProgress" aria-label="Progress to next level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <span id="gpLevelBar" style="width:0%"></span>
+            </div>
+            <p class="gp-footnote">One shared level grows with activity from both paths. Level thresholds are starter values.</p>
+          </article>
+
+          <article class="gp-card gp-path-card">
+            <div class="gp-path-heading"><h2><span class="gp-dot academic"></span>Academic</h2><span class="gp-muted">Study</span></div>
+            <div><strong class="gp-xp-value"><span id="gpAcademicXp">0</span> <small>XP earned</small></strong>
+              <div class="gp-progress-track"><span id="gpAcademicBar" style="width:0%"></span></div>
+              <p class="gp-caption">Tutoring · quizzes · study goals</p>
+            </div>
+          </article>
+
+          <article class="gp-card gp-path-card">
+            <div class="gp-path-heading"><h2><span class="gp-dot gaming"></span>Gaming</h2><span class="gp-muted">Play</span></div>
+            <div><strong class="gp-xp-value"><span id="gpGamingXp">0</span> <small>XP earned</small></strong>
+              <div class="gp-progress-track gaming"><span id="gpGamingBar" style="width:0%"></span></div>
+              <p class="gp-caption">Coaching · challenges · milestones</p>
+            </div>
+          </article>
+        </div>
+
+        <div class="gp-section-heading">
+          <div><h2>Quests for this week</h2><p>Academic, Gaming, and combined goals can support one another.</p></div>
+          <div class="gp-filters" role="group" aria-label="Filter quests">
+            <button class="gp-filter active" type="button" data-quest-filter="all" aria-pressed="true">All</button>
+            <button class="gp-filter" type="button" data-quest-filter="academic" aria-pressed="false">Academic</button>
+            <button class="gp-filter" type="button" data-quest-filter="gaming" aria-pressed="false">Gaming</button>
+            <button class="gp-filter" type="button" data-quest-filter="combined" aria-pressed="false">Combined</button>
+          </div>
+        </div>
+
+        <div class="gp-middle-grid">
+          <section class="gp-card gp-quests" aria-label="Current quests">
+            <article class="gp-quest" data-quest-kind="academic">
+              <span class="gp-quest-icon academic" aria-hidden="true">▤</span>
+              <div class="gp-quest-copy"><h3>Study Sprint <span class="gp-tag academic">Academic</span></h3><p>Log 3 Academic activities</p></div>
+              <div class="gp-quest-progress"><strong>Quest</strong><span class="gp-mini-track"><i data-quest-bar style="width:0%"></i></span><small data-quest-count>0 of 3</small></div>
+            </article>
+            <article class="gp-quest" data-quest-kind="gaming">
+              <span class="gp-quest-icon gaming" aria-hidden="true">⌘</span>
+              <div class="gp-quest-copy"><h3>Review &amp; Improve <span class="gp-tag gaming">Gaming</span></h3><p>Log 2 Gaming activities</p></div>
+              <div class="gp-quest-progress"><strong>Quest</strong><span class="gp-mini-track gaming"><i data-quest-bar style="width:0%"></i></span><small data-quest-count>0 of 2</small></div>
+            </article>
+            <article class="gp-quest" data-quest-kind="combined">
+              <span class="gp-quest-icon combined" aria-hidden="true">⚡</span>
+              <div class="gp-quest-copy"><h3>Balanced Week <span class="gp-tag combined">Combined</span></h3><p>Log an activity in each path this week</p></div>
+              <div class="gp-quest-progress"><strong>Weekly</strong><span class="gp-mini-track combined"><i data-quest-bar style="width:0%"></i></span><small data-quest-count>0 of 2</small></div>
+            </article>
+            <article class="gp-quest" data-quest-kind="academic">
+              <span class="gp-quest-icon academic" aria-hidden="true">◎</span>
+              <div class="gp-quest-copy"><h3>First Milestone <span class="gp-tag combined">Combined</span></h3><p>Earn 100 XP across both paths</p></div>
+              <div class="gp-quest-progress"><strong>Level up</strong><span class="gp-mini-track combined"><i data-quest-bar style="width:0%"></i></span><small data-quest-count>0 of 100 XP</small></div>
+            </article>
+            <p class="gp-footnote">Quest progress updates when you log an activity. Entries do not verify real sessions.</p>
+          </section>
+
+          <article class="gp-card gp-streak-card">
+            <div class="gp-card-heading"><h2>Balance streak</h2><span class="gp-muted">This week</span></div>
+            <div class="gp-streak-count"><span aria-hidden="true">🔥</span><div><strong id="gpStreakCount">0 weeks</strong><small>Consecutive weeks with both paths</small></div></div>
+            <div class="gp-week" aria-label="Activity recorded each day this week">
+              <span data-weekday="0">M<b>·</b></span><span data-weekday="1">T<b>·</b></span><span data-weekday="2">W<b>·</b></span>
+              <span data-weekday="3">T<b>·</b></span><span data-weekday="4">F<b>·</b></span><span data-weekday="5">S<b>·</b></span><span data-weekday="6">S<b>·</b></span>
+            </div>
+            <p>Log at least one activity in each path during the same week to build your balance streak.</p>
+          </article>
+        </div>
+
+        <div class="gp-section-heading gp-cross-heading">
+          <div><h2>Progress that crosses paths</h2><p>Achievements in one area can open opportunities in the other.</p></div>
+        </div>
+        <div class="gp-lower-grid">
+          <article class="gp-card gp-cross-card">
+            <div class="gp-card-heading"><h2>Study-to-Earn</h2><span class="gp-reward-chip">✦ Cross-path perk</span></div>
+            <p>Academic and Gaming activities contribute to shared progress. Credits or discounts can make the next step in either path more accessible.</p>
+            <div class="gp-flow"><span><b>Learn</b>Study activity</span><i aria-hidden="true">→</i><span><b>Progress</b>Earn XP / credits</span><i aria-hidden="true">→</i><span><b>Play</b>Unlock a perk</span></div>
+            <small>Reward rules and values to be confirmed.</small>
+          </article>
+
+          <article class="gp-card">
+            <div class="gp-card-heading"><h2>Achievements</h2><span class="gp-muted">Unlock as you go</span></div>
+            <div class="gp-badges">
+              <div data-badge="academic"><span aria-hidden="true">📚</span><strong>Study Starter</strong><small>Academic</small></div>
+              <div data-badge="gaming"><span aria-hidden="true">🎮</span><strong>Game Sense</strong><small>Gaming</small></div>
+              <div data-badge="combined"><span aria-hidden="true">⚖️</span><strong>Two Worlds</strong><small>Combined</small></div>
+            </div>
+            <p class="gp-footnote">Badges reflect activities recorded in this browser.</p>
+          </article>
+
+          <article class="gp-card" id="gpRewards">
+            <div class="gp-card-heading"><h2>Cross-path rewards</h2><span class="gp-muted">Ideas · not redeemable yet</span></div>
+            <div class="gp-bundle">
+              <h3>Study + Scrim Pack <span class="gp-tag combined">Bundle</span></h3>
+              <p>Pair tutoring with a coaching or scrim review session.</p>
+              <span class="gp-coming-soon">Reward details pending · concept only</span>
+            </div>
+            <div class="gp-bundle gp-leaderboard">
+              <h3>Community leaderboard <span class="gp-tag academic">Shared</span></h3>
+              <p>Community rankings require shared verified XP and agreed rules.</p>
+              <div><strong>Community leaderboard</strong><span>Coming later</span></div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <dialog class="gp-activity-dialog" id="gpActivityDialog" aria-labelledby="gpActivityTitle">
+        <section class="gp-card gp-activity-panel">
+          <div class="gp-card-heading"><div><h2 id="gpActivityTitle">Log an activity</h2><p class="gp-caption">Choose an activity to add local demo XP.</p></div><button class="gp-reset" type="button" id="gpResetProgress">Reset progress</button></div>
+          <div class="gp-activity-actions">
+            <button type="button" class="gp-activity-button academic" data-xp-path="academic" data-xp-amount="20" data-xp-label="Academic practice"><span>📚</span><span><strong>Academic practice</strong><small>+20 XP · self-entered</small></span></button>
+            <button type="button" class="gp-activity-button gaming" data-xp-path="gaming" data-xp-amount="20" data-xp-label="Gaming challenge"><span>🎮</span><span><strong>Gaming challenge</strong><small>+20 XP · self-entered</small></span></button>
+            <button type="button" class="gp-activity-button academic" data-xp-path="academic" data-xp-amount="50" data-xp-label="Tutoring session"><span>✎</span><span><strong>Tutoring session</strong><small>+50 XP · mark completed</small></span></button>
+            <button type="button" class="gp-activity-button gaming" data-xp-path="gaming" data-xp-amount="50" data-xp-label="Coaching session"><span>⌘</span><span><strong>Coaching session</strong><small>+50 XP · mark completed</small></span></button>
+          </div>
+          <p class="gp-feedback" id="gpActivityFeedback" role="status" aria-live="polite"></p>
+          <button class="gp-dialog-close" type="button" id="gpCloseActivity">Done</button>
+        </section>
+      </dialog>
+
       <!-- Search Hero on Main Page -->
-      <section class="dashboard-search-hero">
+      <section class="dashboard-search-hero hidden">
         <div class="search-hero-inner">
+          <a class="gp-primary-link gp-progress-return" href="{{ url_for('main.dashboard') }}">← Your progress</a>
           <span class="pill a">LEARN 2 PLAY</span>
           <h1>Find Verified Tutors &amp; Gaming Coaches</h1>
           <p>Book 1-on-1 personalized academic sessions or competitive esports coaching in Naga City.</p>
@@ -117,7 +267,7 @@
       </section>
 
       <!-- Grid of Registered Tutors -->
-      <section class="tutor-grid-section">
+      <section class="tutor-grid-section hidden">
         <div class="grid" id="tutorGrid">
           <!-- Real registered mentors render here -->
         </div>
@@ -125,8 +275,8 @@
         <!-- Clean Empty State -->
         <div class="sessions-empty-box hidden" id="emptyState" style="padding: 60px 20px;">
           <div class="empty-icon">🔍</div>
-          <h3>No mentors found</h3>
-          <p id="emptyStateMsg">There are currently no registered tutors or coaches matching your search. When verified mentors join Learn2Play, they will appear here!</p>
+          <h3 id="emptyStateTitle">No educators yet</h3>
+          <p id="emptyStateMsg">There are currently no registered tutors or coaches. Verified educators will appear here when they join Learn2Play.</p>
         </div>
       </section>
     </main>

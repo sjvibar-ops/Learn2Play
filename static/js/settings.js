@@ -25,6 +25,92 @@ function showSettingsToast(message, isError = false) {
     }, 3500);
 }
 
+// Path activation uses the locked choices saved at registration and stays browser-local.
+(function setupPathActivation() {
+    const paths = ["academic", "gaming"];
+    const email = (document.getElementById("settingsEmail")?.textContent || "").trim().toLowerCase();
+    if (!email) return;
+    const key = `l2_participation_${encodeURIComponent(email)}`;
+    let saved = null;
+    try {
+        saved = JSON.parse(localStorage.getItem(key) || "null");
+    } catch (error) {
+        saved = null;
+    }
+    const participation = saved?.participation;
+
+    function render() {
+        paths.forEach(path => {
+            const text = document.getElementById(`${path}PathActivationText`);
+            const activeBadge = document.querySelector(`[data-path-active="${path}"]`);
+            const button = document.querySelector(`[data-activate-path="${path}"]`);
+            const applyButton = document.querySelector(`[data-apply-path="${path}"]`);
+            const choice = participation?.[path];
+            const roles = Array.isArray(choice?.roles) ? choice.roles : [];
+            if (!text || !activeBadge || !button || !applyButton) return;
+            const roleLabels = roles.map(role => role === "learn" ? "Learn" : role === "teach" ? "Teach" : "").filter(Boolean);
+            if (!saved?.locked || !choice) {
+                text.textContent = "Your saved path choices aren’t available in this browser.";
+                activeBadge.classList.add("hidden");
+                button.classList.add("hidden");
+                applyButton.classList.add("hidden");
+                return;
+            }
+            applyButton.classList.toggle("hidden", !roles.includes("learn") || roles.includes("teach"));
+            if (choice.enabled) {
+                text.textContent = `Active · ${roleLabels.join(" and ") || "role choice saved"}`;
+                activeBadge.classList.remove("hidden");
+                button.classList.add("hidden");
+            } else {
+                text.textContent = `Not active · ${roleLabels.join(" and ") || "Learn"} role locked`;
+                activeBadge.classList.add("hidden");
+                button.classList.remove("hidden");
+            }
+        });
+    }
+
+    document.querySelectorAll("[data-activate-path]").forEach(button => {
+        button.addEventListener("click", () => {
+            const path = button.dataset.activatePath;
+            if (!paths.includes(path) || !participation?.[path] || participation[path].enabled) return;
+            // Older browser-only registrations stored no role for a skipped path;
+            // keep that path's existing Learn-only default when activating it.
+            if (!Array.isArray(participation[path].roles) || participation[path].roles.length === 0) {
+                participation[path].roles = ["learn"];
+            }
+            participation[path].enabled = true;
+            saved.updatedAt = new Date().toISOString();
+            try {
+                localStorage.setItem(key, JSON.stringify(saved));
+                const cached = JSON.parse(localStorage.getItem("l2_user") || "null");
+                if (cached) {
+                    cached.participation = participation;
+                    cached.participation_locked = true;
+                    localStorage.setItem("l2_user", JSON.stringify(cached));
+                }
+            } catch (error) {
+                showSettingsToast("Couldn’t save this path in your browser. Check your browser storage settings.", true);
+                return;
+            }
+            render();
+            document.dispatchEvent(new CustomEvent("l2:participationchange"));
+            showSettingsToast(`${path === "academic" ? "Academic" : "Gaming"} path activated.`);
+        });
+    });
+
+    document.querySelectorAll("[data-apply-path]").forEach(button => {
+        button.addEventListener("click", () => {
+            const path = button.dataset.applyPath;
+            const choice = participation?.[path];
+            if (!paths.includes(path) || !choice?.roles?.includes("learn") || choice.roles.includes("teach")) return;
+            const label = path === "academic" ? "Academic teaching" : "Gaming coaching";
+            showSettingsToast(`${label} applications aren’t connected yet. Admin review will be required.`);
+        });
+    });
+
+    render();
+})();
+
 // ---------- 1. Tab Switching System ----------
 (function initSettingsTabs() {
     const tabButtons = document.querySelectorAll(".settings-tab-btn");
