@@ -286,43 +286,52 @@ def cleanup_avatar_object(object_path):
         current_app.logger.exception("Failed to remove avatar object from Supabase Storage: %s", object_path)
 
 
-def extract_supabase_avatar_path(url, user_id):
-    """
-    Safely extracts and validates the object path from a Supabase avatar public URL.
-    Ensures the URL belongs to this application's Supabase instance, the 'avatars' bucket,
-    and specifically the user's directory: 'user_<user_id>/<filename>'.
-    Returns None if the URL is local, external, from another bucket, or from another user.
-    """
-    if not url or not isinstance(url, str):
+def public_avatar_object_path(url):
+    """Return the object key for an HTTPS public avatar URL on this project."""
+    if not isinstance(url, str) or re.search(r"[\s\x00-\x1f\x7f?#]", url):
         return None
 
     try:
-        parsed = urllib.parse.urlparse(url)
-
-        supabase_url = os.environ.get("SUPABASE_URL")
-        if supabase_url:
-            expected_host = urllib.parse.urlparse(supabase_url).netloc.lower()
-            if parsed.netloc and parsed.netloc.lower() != expected_host:
-                return None
-        elif parsed.netloc and not parsed.netloc.lower().endswith(".supabase.co"):
-            return None
-
-        expected_prefix = f"/storage/v1/object/public/{AVATARS_BUCKET}/"
-        if not parsed.path.startswith(expected_prefix):
-            return None
-
-        object_path = parsed.path[len(expected_prefix):].lstrip("/")
-        expected_user_prefix = f"user_{user_id}/"
-        if not object_path.startswith(expected_user_prefix):
-            return None
-
-        filename = object_path[len(expected_user_prefix):]
-        if not filename or "/" in filename or "\\" in filename or ".." in filename:
-            return None
-
-        return object_path
-    except Exception:
+        public = urllib.parse.urlsplit(url)
+        project = urllib.parse.urlsplit(os.environ.get("SUPABASE_URL", ""))
+        public_port = 443 if public.port is None else public.port
+        project_port = 443 if project.port is None else project.port
+    except ValueError:
         return None
+
+    if (
+        public.scheme != "https"
+        or not public.hostname
+        or public.hostname != project.hostname
+        or public_port != project_port
+        or not re.fullmatch(r"(?:\[[^\[\]]+\]|[^:\[\]\\]+)(?::[0-9]+)?", public.netloc)
+        or project.netloc.endswith(":")
+        or public.username is not None
+        or public.password is not None
+    ):
+        return None
+
+    prefix = f"{project.path.rstrip('/')}/storage/v1/object/public/{AVATARS_BUCKET}/"
+    if not public.path.startswith(prefix):
+        return None
+    return public.path[len(prefix):]
+
+
+def is_uploaded_avatar_url(url, object_path):
+    return public_avatar_object_path(url) == object_path
+
+
+def extract_supabase_avatar_path(url, user_id):
+    """Extract a managed avatar key only from the specified user's folder."""
+    object_path = public_avatar_object_path(url)
+    user_prefix = f"user_{user_id}/"
+    if object_path is None or not object_path.startswith(user_prefix):
+        return None
+
+    filename = object_path[len(user_prefix):]
+    if filename in ("", ".") or ".." in filename or any(char in filename for char in "/\\%"):
+        return None
+    return object_path
 
 
 def validate_avatar_file(file):
@@ -824,12 +833,20 @@ def upload_avatar():
                 "upsert": "false",
             },
         )
-        public_url = bucket.get_public_url(stored_path)
     except Exception as e:
         current_app.logger.exception("Supabase avatar upload failed")
         err_str = str(e).lower()
         if "bucket not found" in err_str or "not found" in err_str:
             return error("Avatar storage bucket is not available. Please ensure the 'avatars' bucket is created in Supabase.", 503)
+        return error("Failed to upload avatar image to storage. Please try again.", 503)
+
+    try:
+        public_url = bucket.get_public_url(stored_path)
+        if not is_uploaded_avatar_url(public_url, stored_path):
+            raise ValueError("Storage did not return the expected public avatar URL.")
+    except Exception:
+        current_app.logger.warning("Could not generate the public URL for the uploaded avatar.")
+        cleanup_avatar_object(stored_path)
         return error("Failed to upload avatar image to storage. Please try again.", 503)
 
     # 2. Update current_user.profile_picture and commit DB

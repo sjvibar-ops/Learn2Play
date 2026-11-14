@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from config import Config
-from wsgi import app
+from __init__ import create_app
 from extensions import db
 from models import User
 
@@ -110,15 +110,14 @@ class Phase5ADatabasePoolingAndCookiesTests(unittest.TestCase):
 
     def test_login_cookie_emission(self):
         """Verify login sets session cookie with HttpOnly and SameSite=Lax."""
-        test_app = app
-        test_app.config.update(
+        test_app = create_app(dict(
             TESTING=True,
             WTF_CSRF_ENABLED=False,
             SQLALCHEMY_DATABASE_URI="sqlite://",
             SESSION_COOKIE_HTTPONLY=True,
             SESSION_COOKIE_SECURE=False,
             SESSION_COOKIE_SAMESITE="Lax",
-        )
+        ))
         with test_app.app_context():
             db.create_all()
             user = User(

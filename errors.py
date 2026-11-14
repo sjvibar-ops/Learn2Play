@@ -1,5 +1,11 @@
 
 from flask import render_template, jsonify, request
+from flask_wtf.csrf import CSRFError
+
+if __package__:
+    from .extensions import db
+else:
+    from extensions import db
 
 
 def wants_json():
@@ -11,6 +17,13 @@ def wants_json():
 
 
 def register_error_handlers(app):
+
+    @app.errorhandler(CSRFError)
+    def csrf_error(error):
+        message = "This page can no longer verify your request. Reload the page, then try again."
+        if wants_json():
+            return jsonify(ok=False, message=message), 400
+        return render_template("errors/400.html", message=message), 400
 
     @app.errorhandler(400)
     def bad_request(error):
@@ -75,7 +88,6 @@ def register_error_handlers(app):
     @app.errorhandler(500)
     def internal_server_error(error):
         # Roll back any unfinished database transaction.
-        from extensions import db
         db.session.rollback()
 
         message = "Something went wrong. Please try again later."

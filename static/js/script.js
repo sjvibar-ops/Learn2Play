@@ -243,14 +243,15 @@ window.L2 = { user, getMode: () => activeMode, setMode };
                 });
 
                 if (!logoutResponse.ok) {
-                    throw new Error("Logout request was rejected.");
+                    const data = await logoutResponse.json().catch(() => ({}));
+                    throw new Error(data.message || "Logout request was rejected.");
                 }
 
                 store.remove(KEYS.user);
                 store.remove(KEYS.mode);
                 window.location.href = "/auth";
             } catch (error) {
-                window.alert("Logout could not be completed. Please try again.");
+                window.alert(error.message || "Logout could not be completed. Please try again.");
             }
         });
     }

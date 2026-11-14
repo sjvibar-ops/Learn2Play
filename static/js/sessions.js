@@ -106,10 +106,13 @@
                         Accept: "application/json"
                     }
                 });
-                if (!logoutResponse.ok) throw new Error("Logout request was rejected.");
+                if (!logoutResponse.ok) {
+                    const data = await logoutResponse.json().catch(() => ({}));
+                    throw new Error(data.message || "Logout request was rejected.");
+                }
                 window.location.href = "/auth";
             } catch (err) {
-                window.alert("Logout could not be completed. Please try again.");
+                window.alert(err.message || "Logout could not be completed. Please try again.");
             }
         });
     }

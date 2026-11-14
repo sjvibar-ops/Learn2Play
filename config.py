@@ -2,7 +2,32 @@
 import os
 import secrets
 
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
+
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+
+
+def validate_production_database_url(database_url):
+    if not database_url or not database_url.strip():
+        raise RuntimeError("Production requires DATABASE_URL to be set.")
+
+    from psycopg import ProgrammingError
+    from psycopg.conninfo import make_conninfo
+    from sqlalchemy.dialects.postgresql.psycopg import PGDialect_psycopg
+
+    message = "Production requires DATABASE_URL to be a valid PostgreSQL URL for Psycopg 3."
+    try:
+        url = make_url(database_url)
+        if url.drivername == "postgresql+psycopg":
+            args, kwargs = PGDialect_psycopg().create_connect_args(url)
+            make_conninfo(*args, **kwargs)
+            if kwargs.get("host") and kwargs.get("dbname"):
+                return
+    except (ArgumentError, ProgrammingError, TypeError, ValueError):
+        # Parser and driver errors can contain parts of the connection string.
+        pass
+    raise RuntimeError(message)
 
 
 class Config:
@@ -43,6 +68,9 @@ class Config:
             if database_url.startswith(old_scheme):
                 database_url = "postgresql+psycopg://" + database_url[len(old_scheme):]
                 break
+
+    if is_production:
+        validate_production_database_url(database_url)
 
     SQLALCHEMY_DATABASE_URI = database_url or (
         "sqlite:///" + os.path.join(BASE_DIR, "learn2play.db")

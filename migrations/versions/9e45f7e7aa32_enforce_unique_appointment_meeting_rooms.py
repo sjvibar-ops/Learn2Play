@@ -18,16 +18,10 @@ depends_on = None
 
 
 def upgrade():
-    op.create_unique_constraint(
-        'uq_appointments_meeting_room',
-        'appointments',
-        ['meeting_room']
-    )
+    with op.batch_alter_table('appointments') as batch_op:
+        batch_op.create_unique_constraint('uq_appointments_meeting_room', ['meeting_room'])
 
 
 def downgrade():
-    op.drop_constraint(
-        'uq_appointments_meeting_room',
-        'appointments',
-        type_='unique'
-    )
+    with op.batch_alter_table('appointments') as batch_op:
+        batch_op.drop_constraint('uq_appointments_meeting_room', type_='unique')

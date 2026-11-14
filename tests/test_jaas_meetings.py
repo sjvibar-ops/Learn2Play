@@ -24,15 +24,14 @@ class JaasMeetingTests(unittest.TestCase):
         cls.public_key = cls.private_key.public_key()
 
     def setUp(self):
-        self.app = create_app()
-        self.app.config.update(
+        self.app = create_app(dict(
             TESTING=True,
             WTF_CSRF_ENABLED=False,
             SQLALCHEMY_DATABASE_URI="sqlite://",
             JAAS_APP_ID="vpaas-magic-cookie-testapp",
             JAAS_API_KEY_ID="test-key-id",
             JAAS_PRIVATE_KEY=self.private_pem,
-        )
+        ))
         self.context = self.app.app_context()
         self.context.push()
         db.create_all()

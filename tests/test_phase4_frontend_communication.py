@@ -2,21 +2,21 @@ import json
 import os
 import re
 import unittest
+from unittest.mock import patch
 
-from wsgi import app
+from __init__ import create_app
 from extensions import db
 from models import User
 
 
 class Phase4FrontendCommunicationTests(unittest.TestCase):
     def setUp(self):
-        self.app = app
-        self.app.config.update(
+        self.app = create_app(dict(
             TESTING=True,
             WTF_CSRF_ENABLED=True,
             SQLALCHEMY_DATABASE_URI="sqlite://",
             SECRET_KEY="test-secret-key-at-least-32-characters-long",
-        )
+        ))
         self.context = self.app.app_context()
         self.context.push()
         db.create_all()
@@ -100,6 +100,25 @@ class Phase4FrontendCommunicationTests(unittest.TestCase):
             json={"email": "nobody@example.test", "password": "wrong"},
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_expired_page_token_requires_manual_recovery(self):
+        page = self.client.get("/register").get_data(as_text=True)
+        token = re.search(r'<meta name="csrf-token" content="([^"]+)">', page).group(1)
+        def register():
+            self.fail("An expired CSRF token reached the registration handler.")
+
+        with patch.dict(self.app.view_functions, {"main.register": register}), patch(
+            "itsdangerous.TimestampSigner.get_timestamp", return_value=2**40
+        ):
+            response = self.client.post("/api/auth/register", headers={"X-CSRFToken": token})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Reload the page", response.json["message"])
+
+    def test_html_csrf_error_offers_recovery(self):
+        self.app.add_url_rule("/protected-form", view_func=lambda: "submitted", methods=["POST"])
+        response = self.client.post("/protected-form")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"Reload the page", response.data)
 
     def test_post_with_csrf_token_from_page_is_accepted(self):
         """Verify CSRF token extracted from meta tag allows POST request to proceed."""

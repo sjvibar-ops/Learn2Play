@@ -59,6 +59,7 @@
   function syncRoles() {
     const show = needsCreds();
     credsField.classList.toggle("hidden", !show);
+    $("verificationNotice").classList.toggle("hidden", !show);
     $("reviewNo").textContent = show ? "4" : "3";
   }
   $("rolesField").addEventListener("change", () => {

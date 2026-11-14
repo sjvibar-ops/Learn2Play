@@ -17,14 +17,14 @@ from werkzeug.datastructures import FileStorage
 
 class Phase5BAvatarStorageTests(unittest.TestCase):
     def setUp(self):
-        self.app = create_app()
-        self.app.config.update(
+        self.enterContext(patch.dict(os.environ, {"SUPABASE_URL": "https://testref.supabase.co"}))
+        self.app = create_app(dict(
             TESTING=True,
             WTF_CSRF_ENABLED=False,
             SQLALCHEMY_DATABASE_URI="sqlite://",
             SUPABASE_URL="https://testref.supabase.co",
             SUPABASE_SERVICE_ROLE_KEY="test-service-key",
-        )
+        ))
         self.context = self.app.app_context()
         self.context.push()
         db.create_all()
@@ -241,13 +241,82 @@ class Phase5BAvatarStorageTests(unittest.TestCase):
         refreshed_user = db.session.get(User, self.user.id)
         self.assertEqual(refreshed_user.profile_picture, original_pic)
 
+    @patch("routes.avatars_bucket")
+    def test_upload_avatar_cleans_up_when_public_url_generation_fails(self, avatars_bucket):
+        old_url = f"https://testref.supabase.co/storage/v1/object/public/avatars/user_{self.user.id}/old.jpg"
+        self.user.profile_picture = old_url
+        db.session.commit()
+        bucket = avatars_bucket.return_value
+        bucket.get_public_url.side_effect = RuntimeError("URL generation failed")
+        client = self.app.test_client()
+        with client.session_transaction() as session:
+            session["_user_id"] = str(self.user.id)
+            session["_fresh"] = True
+
+        response = client.post("/api/profile/avatar", data={
+            "avatar": (io.BytesIO(b"\xff\xd8\xffimage"), "avatar.jpg"),
+        })
+
+        self.assertEqual(response.status_code, 503)
+        bucket.upload.assert_called_once()
+        uploaded_path = bucket.upload.call_args.kwargs["path"]
+        bucket.remove.assert_called_once_with([uploaded_path])
+        self.assertEqual(db.session.get(User, self.user.id).profile_picture, old_url)
+
+    @patch("routes.avatars_bucket")
+    def test_upload_avatar_rejects_invalid_public_urls(self, avatars_bucket):
+        base = "https://testref.supabase.co/storage/v1/object/public"
+        old_url = f"{base}/avatars/user_{self.user.id}/old.jpg"
+        self.user.profile_picture = old_url
+        db.session.commit()
+        client = self.app.test_client()
+        with client.session_transaction() as session:
+            session["_user_id"] = str(self.user.id)
+            session["_fresh"] = True
+
+        cases = {
+            "empty": lambda path: "",
+            "malformed": lambda path: "https://[invalid",
+            "relative": lambda path: f"/storage/v1/object/public/avatars/{path}",
+            "bucket": lambda path: f"{base}/credentials/{path}",
+            "object": lambda path: f"{base}/avatars/{path}.other",
+            "host": lambda path: f"https://other.example.test/storage/v1/object/public/avatars/{path}",
+            "port": lambda path: f"{base.replace('.co/', '.co:8443/')}/avatars/{path}",
+            "empty port": lambda path: f"{base.replace('.co/', '.co:/')}/avatars/{path}",
+            "scheme": lambda path: f"{base.replace('https:', 'http:')}/avatars/{path}",
+            "userinfo": lambda path: f"{base.replace('://', '://user@')}/avatars/{path}",
+            "query": lambda path: f"{base}/avatars/{path}?download=1",
+            "fragment": lambda path: f"{base}/avatars/{path}#image",
+            "cleanup failure": lambda path: "",
+        }
+        for case, public_url in cases.items():
+            with self.subTest(case=case):
+                bucket = MagicMock()
+                avatars_bucket.return_value = bucket
+                bucket.get_public_url.side_effect = public_url
+                if case == "cleanup failure":
+                    bucket.remove.side_effect = RuntimeError("Storage cleanup failed")
+
+                response = client.post("/api/profile/avatar", data={
+                    "avatar": (io.BytesIO(b"\xff\xd8\xffimage"), "avatar.jpg"),
+                })
+
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(response.json["message"], "Failed to upload avatar image to storage. Please try again.")
+                bucket.upload.assert_called_once()
+                uploaded_path = bucket.upload.call_args.kwargs["path"]
+                bucket.remove.assert_called_once_with([uploaded_path])
+                self.assertEqual(db.session.get(User, self.user.id).profile_picture, old_url)
+
     @patch("routes.cleanup_avatar_object")
     @patch("routes.avatars_bucket")
     def test_upload_avatar_db_commit_failure_rollback(self, mock_avatars_bucket, mock_cleanup):
         """Test database commit failure rolls back DB and cleans up newly uploaded storage object."""
         mock_bucket = MagicMock()
         mock_avatars_bucket.return_value = mock_bucket
-        mock_bucket.get_public_url.return_value = "https://testref.supabase.co/storage/v1/object/public/avatars/user_1/new.jpg"
+        mock_bucket.get_public_url.side_effect = (
+            lambda path: f"https://testref.supabase.co/storage/v1/object/public/{AVATARS_BUCKET}/{path}"
+        )
 
         original_pic = "/static/uploads/avatars/user_1_original.jpg"
         self.user.profile_picture = original_pic
@@ -289,7 +358,9 @@ class Phase5BAvatarStorageTests(unittest.TestCase):
 
         mock_bucket = MagicMock()
         mock_avatars_bucket.return_value = mock_bucket
-        mock_bucket.get_public_url.return_value = f"https://testref.supabase.co/storage/v1/object/public/{AVATARS_BUCKET}/user_{self.user.id}/new_avatar.jpg"
+        mock_bucket.get_public_url.side_effect = (
+            lambda path: f"https://testref.supabase.co/storage/v1/object/public/{AVATARS_BUCKET}/{path}"
+        )
 
         client = self.app.test_client()
         with client.session_transaction() as sess:
@@ -307,6 +378,65 @@ class Phase5BAvatarStorageTests(unittest.TestCase):
         # Cleanup should be invoked on old_avatar.jpg
         mock_cleanup.assert_called_once_with(f"user_{self.user.id}/old_avatar.jpg")
 
+    @patch("routes.avatars_bucket")
+    def test_replacement_uses_shared_public_avatar_url_rules(self, avatars_bucket):
+        origin = "https://testref.supabase.co"
+        prefix = "/storage/v1/object/public"
+        user_id = self.user.id
+        old_path = f"user_{user_id}/old.jpg"
+        cases = [
+            ("normal", origin, f"{origin}{prefix}/avatars/{old_path}", True),
+            ("HTTPS port", origin, f"{origin}:443{prefix}/avatars/{old_path}", True),
+            ("base path", f"{origin}/project/", f"{origin}/project{prefix}/avatars/{old_path}", True),
+            ("empty port", origin, f"{origin}:{prefix}/avatars/{old_path}", False),
+            ("wrong port", origin, f"{origin}:8443{prefix}/avatars/{old_path}", False),
+            ("wrong scheme", origin, f"http://testref.supabase.co{prefix}/avatars/{old_path}", False),
+            ("wrong host", origin, f"https://other.example.test{prefix}/avatars/{old_path}", False),
+            ("wrong bucket", origin, f"{origin}{prefix}/credentials/{old_path}", False),
+            ("wrong user", origin, f"{origin}{prefix}/avatars/user_{user_id + 1}/old.jpg", False),
+            ("nested path", origin, f"{origin}{prefix}/avatars/{old_path}/nested", False),
+            ("dot filename", origin, f"{origin}{prefix}/avatars/user_{user_id}/.", False),
+            ("encoded separator", origin, f"{origin}{prefix}/avatars/{old_path}%2Fnested", False),
+            ("credentials", origin, f"https://user@testref.supabase.co{prefix}/avatars/{old_path}", False),
+            ("query", origin, f"{origin}{prefix}/avatars/{old_path}?download=1", False),
+            ("fragment", origin, f"{origin}{prefix}/avatars/{old_path}#image", False),
+        ]
+        client = self.app.test_client()
+        with client.session_transaction() as session:
+            session["_user_id"] = str(user_id)
+            session["_fresh"] = True
+
+        for case, project, old_url, should_remove in cases:
+            with self.subTest(case=case), patch.dict(os.environ, {"SUPABASE_URL": project}):
+                self.user.profile_picture = old_url
+                db.session.commit()
+                bucket = MagicMock()
+                avatars_bucket.return_value = bucket
+                public_base = f"{project.rstrip('/')}{prefix}/avatars"
+                if case == "HTTPS port":
+                    public_base = f"{origin}:443{prefix}/avatars"
+                bucket.get_public_url.side_effect = lambda path: f"{public_base}/{path}"
+                profile_at_removal = []
+                bucket.remove.side_effect = lambda paths: profile_at_removal.append(
+                    self.user.profile_picture
+                )
+                operations = MagicMock()
+                operations.attach_mock(bucket.remove, "remove")
+                with patch.object(db.session, "commit", wraps=db.session.commit) as commit:
+                    operations.attach_mock(commit, "commit")
+                    response = client.post("/api/profile/avatar", data={
+                        "avatar": (io.BytesIO(b"\xff\xd8\xffimage"), "avatar.jpg"),
+                    })
+                    self.assertEqual(response.status_code, 200)
+                    commit.assert_called_once()
+                if should_remove:
+                    bucket.remove.assert_called_once_with([old_path])
+                    self.assertEqual([call[0] for call in operations.mock_calls], ["commit", "remove"])
+                    new_path = bucket.upload.call_args.kwargs["path"]
+                    self.assertEqual(profile_at_removal, [f"{public_base}/{new_path}"])
+                else:
+                    bucket.remove.assert_not_called()
+
     @patch("routes.cleanup_avatar_object")
     @patch("routes.avatars_bucket")
     def test_upload_avatar_preserves_local_avatar_reference(self, mock_avatars_bucket, mock_cleanup):
@@ -317,7 +447,9 @@ class Phase5BAvatarStorageTests(unittest.TestCase):
 
         mock_bucket = MagicMock()
         mock_avatars_bucket.return_value = mock_bucket
-        mock_bucket.get_public_url.return_value = f"https://testref.supabase.co/storage/v1/object/public/{AVATARS_BUCKET}/user_{self.user.id}/new_avatar.jpg"
+        mock_bucket.get_public_url.side_effect = (
+            lambda path: f"https://testref.supabase.co/storage/v1/object/public/{AVATARS_BUCKET}/{path}"
+        )
 
         client = self.app.test_client()
         with client.session_transaction() as sess:
