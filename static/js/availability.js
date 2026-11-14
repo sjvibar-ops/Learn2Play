@@ -44,7 +44,7 @@
         });
         item.append(label, remove); unavailableList.appendChild(item);
       });
-      if (!data.dates?.length) unavailableList.textContent = "No dates marked unavailable.";
+      if (!data.dates?.length) { unavailableList.innerHTML = "<p style=\"color:var(--txt3,#8b8fa8);font-size:13px;margin-top:8px;\">No dates marked unavailable.</p>"; }
     } catch (_) { unavailableList.textContent = "Could not load unavailable dates."; }
   }
   form.addEventListener("submit", async event => {

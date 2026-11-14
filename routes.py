@@ -88,12 +88,18 @@ def create_jaas_participant_token(appointment, participant):
         "sub": app_id,
         "room": appointment.meeting_room,
         "nbf": int(now.timestamp()) - 10,
-        "exp": int(now.timestamp()) + 300,
+        "exp": int(now.timestamp()) + 600,
         "context": {
             "user": {
                 "id": str(participant.id),
                 "name": participant.display_name,
                 "moderator": "true" if is_provider else "false",
+            },
+            "features": {
+                "recording": "false",
+                "livestreaming": "false",
+                "transcription": "false",
+                "outbound-call": "false",
             },
             "room": {"regex": False},
         },

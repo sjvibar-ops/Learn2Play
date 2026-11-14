@@ -2,6 +2,7 @@ import json
 import re
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import jwt
 from cryptography.hazmat.primitives import serialization
@@ -94,8 +95,25 @@ class JaasMeetingTests(unittest.TestCase):
         return claims, jwt.get_unverified_header(token)
 
     def test_assigned_provider_receives_moderator_token_for_exact_room(self):
-        token = self._meeting_token(self.provider)
-        claims, header = self._decode(token)
+        generated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        with patch("routes.datetime", wraps=datetime) as clock:
+            clock.now.return_value = generated_at
+            token = self._meeting_token(self.provider)
+        # The fixture uses a fixed clock, so check the signed timestamps explicitly.
+        claims = jwt.decode(
+            token, self.public_key, algorithms=["RS256"], audience="jitsi", issuer="chat",
+            options={"verify_exp": False, "verify_nbf": False},
+        )
+        timestamp = int(generated_at.timestamp())
+        self.assertEqual(claims["nbf"], timestamp - 10)
+        self.assertEqual(claims["exp"], timestamp + 600)
+        self.assertEqual(claims["context"]["features"], {
+            "recording": "false",
+            "livestreaming": "false",
+            "transcription": "false",
+            "outbound-call": "false",
+        })
+        header = jwt.get_unverified_header(token)
         self.assertEqual(header["alg"], "RS256")
         self.assertEqual(header["typ"], "JWT")
         self.assertEqual(header["kid"], "vpaas-magic-cookie-testapp/test-key-id")
