@@ -1,5 +1,5 @@
 {# Mentor and coach home, populated by the existing API. #}
-<section class="mentor-home" id="mentorHome" data-show-for="mentor coach" aria-labelledby="mentorHomeTitle">
+<section class="mentor-home hidden" id="mentorHome" data-show-for="mentor coach" aria-labelledby="mentorHomeTitle">
   <header class="mentor-home-heading">
     <div><p class="mentor-home-eyebrow">LEARN2PLAY · EDUCATOR WORKSPACE</p><h1 id="mentorHomeTitle">Welcome, {{ current_user.display_name }}</h1><p>Manage learner requests, upcoming sessions, and your teaching availability.</p></div>
     <div class="mentor-home-actions"><a class="mentor-home-secondary" href="{{ url_for('main.schedule') }}">Manage availability</a><a class="mentor-home-primary" href="{{ url_for('main.sessions') }}">Open sessions</a></div>

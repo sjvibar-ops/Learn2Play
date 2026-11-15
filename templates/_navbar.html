@@ -36,11 +36,17 @@
 
   <!-- ===== Profile Dropdown (shared by both navbars) ===== -->
   <div class="tb-right">
-    {% if not (current_user.is_authenticated and current_user.is_admin) %}
-    <div class="mode-switch hidden" id="modeSwitch" role="group" aria-label="Switch account mode">
+    {% if current_user.is_authenticated and not current_user.is_admin %}
+    <div class="mode-switch hidden" id="modeSwitch" data-account-id="{{ current_user.id }}" role="group" aria-label="Switch account mode">
+      {% if 'student' in current_user.roles %}
       <button class="mode-btn" type="button" data-mode="student" aria-pressed="false">Learning</button>
+      {% endif %}
+      {% if 'mentor' in current_user.roles %}
       <button class="mode-btn" type="button" data-mode="mentor" aria-pressed="false">Teaching</button>
+      {% endif %}
+      {% if 'coach' in current_user.roles %}
       <button class="mode-btn" type="button" data-mode="coach" aria-pressed="false">Coaching</button>
+      {% endif %}
     </div>
     {% endif %}
     <div class="tb-profile" id="profileMenu">

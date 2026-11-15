@@ -19,23 +19,22 @@
     [...form.querySelectorAll('input[name="roles"]:checked')].map((i) => i.value);
   const needsCreds = () => getRoles().some((r) => VERIFIED_ROLES.includes(r));
   const paths = {
-    academic: { path: "academicPath", learn: "academicLearn", teach: "academicTeach", panel: "academicParticipation", card: "academicPathCard" },
-    gaming: { path: "gamingPath", learn: "gamingLearn", teach: "gamingTeach", panel: "gamingParticipation", card: "gamingPathCard" },
+    academic: { path: "academicPath", learn: "academicLearn", teach: "academicTeach", card: "academicPathCard", providerRole: "mentor" },
+    gaming: { path: "gamingPath", learn: "gamingLearn", teach: "gamingTeach", card: "gamingPathCard", providerRole: "coach" },
   };
 
   function syncPathChoices() {
     const roles = new Set();
-    let hasLearner = false;
     Object.values(paths).forEach((choice) => {
       const selected = $(choice.path).checked;
-      const learning = $(choice.learn).checked;
-      const teaching = $(choice.teach).checked;
+      const learning = $(choice.learn);
+      const teaching = $(choice.teach);
       $(choice.card).classList.toggle("selected", selected);
-      if (learning) hasLearner = true;
-      if (teaching && choice.path === "academicPath") roles.add("mentor");
-      if (teaching && choice.path === "gamingPath") roles.add("coach");
+      learning.disabled = teaching.disabled = !selected;
+      if (!selected) return;
+      if (learning.checked) roles.add("student");
+      if (teaching.checked) roles.add(choice.providerRole);
     });
-    if (hasLearner) roles.add("student");
     form.querySelectorAll('input[name="roles"]').forEach((input) => {
       input.checked = roles.has(input.value);
     });
@@ -47,8 +46,8 @@
       return [name, {
         enabled,
         roles: [
-          ...($(choice.learn).checked ? ["learn"] : []),
-          ...($(choice.teach).checked ? ["teach"] : []),
+          ...(enabled && $(choice.learn).checked ? ["learn"] : []),
+          ...(enabled && $(choice.teach).checked ? ["teach"] : []),
         ],
       }];
     }));
@@ -196,14 +195,11 @@
     const name = $("name").value.trim();
     const pw = $("password").value;
 
-    const selectedPaths = Object.entries(paths).filter(([, choice]) => $(choice.path).checked);
-    const roleChoicesMissing = Object.values(paths).some((choice) => !$(choice.learn).checked && !$(choice.teach).checked);
+    const selectedPaths = Object.values(paths).filter((choice) => $(choice.path).checked);
     if (selectedPaths.length === 0) {
       errs.roles = "Choose at least one path to activate now.";
-    } else if (roleChoicesMissing) {
-      errs.roles = "Choose Learn, Teach, or both for Academic and Gaming.";
-    } else if (getRoles().length === 0) {
-      errs.roles = "Choose at least one way to participate.";
+    } else if (selectedPaths.some((choice) => !$(choice.learn).checked && !$(choice.teach).checked)) {
+      errs.roles = "Choose Learn, Teach, or both for each enabled path.";
     }
     if (name.length < 2 || name.length > 80) errs.name = "Enter your full name (2 to 80 characters).";
     if (!EMAIL_RE.test($("email").value.trim())) errs.email = "Enter a valid email address.";
@@ -246,10 +242,12 @@
       return;
     }
 
+    const participation = getParticipationChoices();
+    const email = $("email").value.trim();
     const body = new FormData();
     getRoles().forEach((r) => body.append("roles", r));
     body.append("name", $("name").value.trim());
-    body.append("email", $("email").value.trim());
+    body.append("email", email);
     body.append("password", $("password").value);
     body.append("confirm_password", $("confirmPassword").value);
     if ($("ack").checked) body.append("acknowledged", "true");
@@ -280,7 +278,7 @@
         }
         return;
       }
-      showDone(data, getParticipationChoices(), $("email").value.trim().toLowerCase());
+      showDone(data, participation, email.toLowerCase());
     } catch (err) {
       showNote(err.message || "Something went wrong. Please try again.");
     } finally {

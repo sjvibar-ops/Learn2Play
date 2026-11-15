@@ -6,7 +6,6 @@ import subprocess
 import sys
 from unittest.mock import Mock
 
-from flask_migrate import upgrade
 import pytest
 from sqlalchemy import inspect
 
@@ -27,7 +26,7 @@ def registration_app(tmp_path, monkeypatch):
     app = create_app()
     app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
     with app.app_context():
-        upgrade(directory=str(ROOT / "migrations"))
+        db.create_all()
         assert db.engine.dialect.name == "sqlite"
         assert Path(db.engine.url.database) == database
         assert set(db.metadata.tables) <= set(inspect(db.engine).get_table_names())

@@ -52,7 +52,6 @@ const dashboardView = new URLSearchParams(window.location.search).get("view") ==
 document.body.dataset.dashboardView = dashboardView;
 const gamificationPreview = document.getElementById("gamificationPreview");
 const browseSections = document.querySelectorAll(".dashboard-search-hero, .tutor-grid-section");
-gamificationPreview?.classList.toggle("hidden", dashboardView !== "progress");
 browseSections.forEach((section) => section.classList.toggle("hidden", dashboardView !== "browse"));
 document.querySelectorAll("[data-dashboard-browse]").forEach((section) => {
   section.classList.toggle("hidden", dashboardView !== "browse");
@@ -563,7 +562,8 @@ updateSidebarSchedule(null, null);
     );
   }
 
-  const state = { category: "all", query: "", maxRate: Number(priceRange?.value || 50000), sort: "recommended" };
+  const defaultRate = Number(priceRange?.defaultValue || 50000);
+  const state = { category: "all", query: "", maxRate: defaultRate, sort: "recommended" };
 
   function updateBrowseCounts() {
     const countFor = category => TUTORS.filter(t => category === "all" || t.category === category || t.category === "both").length;
@@ -576,7 +576,7 @@ updateSidebarSchedule(null, null);
     let list = TUTORS.filter((t) => {
       if (state.category !== "all" && t.category !== state.category && t.category !== "both") return false;
       const rate = Number(t.price ?? 0);
-      if (rate > state.maxRate) return false;
+      if (state.maxRate < defaultRate && rate > state.maxRate) return false;
       const q = state.query.toLowerCase();
       if (!q) return true;
       const topicsStr = (t.topics || []).join(" ").toLowerCase();
@@ -589,7 +589,7 @@ updateSidebarSchedule(null, null);
     updateBrowseCounts();
     if (resultsCount) resultsCount.textContent = loadError ? "Educators unavailable" : `${list.length} educator${list.length === 1 ? "" : "s"} shown`;
     if (priceDisplay && priceRange) {
-      priceDisplay.textContent = Number(priceRange.value) >= 50000 ? "Any rate" : `Up to ₱${Number(priceRange.value).toLocaleString("en-PH")}/hr`;
+      priceDisplay.textContent = state.maxRate >= defaultRate ? "Any rate" : `Up to ₱${state.maxRate.toLocaleString("en-PH")}/hr`;
     }
 
     if (list.length === 0) {
@@ -664,11 +664,11 @@ updateSidebarSchedule(null, null);
     render();
   });
   resetFilters?.addEventListener("click", () => {
-    state.category = "all";
     state.query = "";
+    state.maxRate = defaultRate;
     state.sort = "recommended";
     if (searchInput) searchInput.value = "";
-    if (priceRange) priceRange.value = priceRange.max;
+    if (priceRange) priceRange.value = priceRange.defaultValue;
     if (sortSelect) sortSelect.value = "recommended";
     setCategory("all");
   });

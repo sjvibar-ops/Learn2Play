@@ -13,7 +13,7 @@
 
   {% set active_page = 'dashboard' %}
   {% include '_navbar.html' %}
-  
+
   <!-- ===== Pending Verification Banner ===== -->
   {% if pending_provider_roles %}
   <div class="pending-verify-banner">
@@ -94,9 +94,16 @@
     <!-- Main Content -->
     <main class="content">
 
-      {% include 'student/student-dashboard.html' %}
-      {% include 'student/browse-educators.html' %}
-      {% include 'mentor/mentor-dashboard.html' %}
+      {% if request.args.get('view') == 'browse' %}
+        {% include 'student/browse-educators.html' %}
+      {% else %}
+        {% if 'student' in current_user.roles %}
+          {% include 'student/student-dashboard.html' %}
+        {% endif %}
+        {% if 'mentor' in current_user.roles or 'coach' in current_user.roles %}
+          {% include 'mentor/mentor-dashboard.html' %}
+        {% endif %}
+      {% endif %}
     </main>
   </div>
 

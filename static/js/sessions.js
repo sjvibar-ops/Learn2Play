@@ -219,4 +219,3 @@
         btn.addEventListener("click", () => { window.location.href = "/schedule#availabilityForm"; });
     });
 })();
-
