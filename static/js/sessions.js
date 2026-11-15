@@ -32,8 +32,27 @@
     // 2. Filter and search learner bookings.
     let activeFilter = "upcoming";
     const searchInput = document.getElementById("sessionSearch");
-    const startOfDay = value => { const d = new Date(value); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); };
-    const weekStart = value => { const d = startOfDay(value); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; };
+    const dayMs = 24 * 60 * 60 * 1000;
+    const phtOffsetMs = 8 * 60 * 60 * 1000;
+    const confirmedStatuses = ["accepted", "scheduled"];
+    const activeStatuses = ["pending", ...confirmedStatuses];
+
+    function sessionDateRanges(now) {
+        // Shift the clock for Philippine calendar arithmetic, then return UTC boundaries.
+        const pht = new Date(now + phtOffsetMs);
+        const today = Date.UTC(pht.getUTCFullYear(), pht.getUTCMonth(), pht.getUTCDate()) - phtOffsetMs;
+        const weekStart = today - ((pht.getUTCDay() + 6) % 7) * dayMs;
+        return { today, tomorrow: today + dayMs, weekStart, weekEnd: weekStart + 7 * dayMs };
+    }
+
+    const inRange = (start, from, until) => start >= from && start < until;
+
+    function isUpcomingOrInProgress(status, start, duration, now) {
+        if (confirmedStatuses.includes(status)) {
+            return now < start + (Number(duration) || 60) * 60 * 1000;
+        }
+        return status === "pending" && start >= now;
+    }
 
     tabs.forEach(tab => {
         tab.addEventListener("click", () => {
@@ -48,24 +67,23 @@
 
     searchInput?.addEventListener("input", () => filterSessions(activeFilter));
 
-    function filterSessions(status = activeFilter) {
+    function filterSessions(status = activeFilter, now = Date.now()) {
         activeFilter = status;
         const cards = sessionList ? [...sessionList.querySelectorAll(".scheduled-session")] : [];
         const query = (searchInput?.value || "").trim().toLocaleLowerCase();
-        const now = new Date();
-        const today = startOfDay(now);
-        const nextWeek = new Date(weekStart(now)); nextWeek.setDate(nextWeek.getDate() + 7);
+        const { today, tomorrow, weekStart, weekEnd } = sessionDateRanges(now);
         let visibleCount = 0;
 
         cards.forEach(card => {
             const state = card.dataset.bookingStatus;
-            const start = new Date(card.dataset.startTime);
+            const start = Date.parse(card.dataset.startTime);
             const isPast = state === "completed" || state === "rejected";
             const isCancelled = state === "cancelled";
-            const isActive = !isPast && !isCancelled;
-            const matchesFilter = status === "upcoming" ? isActive
-                : status === "today" ? isActive && start >= today && start < new Date(today.getTime() + 86400000)
-                : status === "this-week" ? isActive && start >= today && start < nextWeek
+            const isActive = activeStatuses.includes(state);
+            const matchesFilter = status === "upcoming"
+                ? isUpcomingOrInProgress(state, start, card.dataset.duration, now)
+                : status === "today" ? isActive && inRange(start, today, tomorrow)
+                : status === "this-week" ? isActive && inRange(start, weekStart, weekEnd)
                 : status === "past" ? isPast
                 : status === "cancelled" ? isCancelled : true;
             const matchesSearch = !query || card.textContent.toLocaleLowerCase().includes(query);
@@ -149,6 +167,7 @@
             const data = await fetch("/api/bookings", {credentials:"same-origin"}).then(r => r.json());
             if (!data.ok) throw new Error(data.message || "Could not load bookings.");
             const bookings = data.bookings || [];
+            const now = Date.now();
             if (sessionList) {
                 const mine = bookings.filter(b => b.student_id === window.L2UserId);
                 const meaningful = mine.filter(b => ["pending", "accepted", "scheduled", "completed", "cancelled", "rejected"].includes(b.status));
@@ -157,28 +176,31 @@
                     const joinBtn = (b.status === "accepted" || b.status === "scheduled") ? `<button class="session-action join-session" data-id="${b.id}">Join session</button>` : "";
                     const cancelBtn = ["pending", "accepted", "scheduled"].includes(b.status) ? `<button class="session-action cancel-booking" data-id="${b.id}">Cancel booking</button>` : "";
                     const price = b.price === null || b.price === undefined ? "" : `<strong class="session-price">₱${Number(b.price).toLocaleString("en-PH", {minimumFractionDigits: 2, maximumFractionDigits: 2})}<small> session rate</small></strong>`;
-                    return `<article class="scheduled-session student-session-card" data-booking-status="${escapeHtml(b.status)}" data-start-time="${escapeHtml(b.start_time)}">
+                    return `<article class="scheduled-session student-session-card" data-booking-status="${escapeHtml(b.status)}" data-start-time="${escapeHtml(b.start_time)}" data-duration="${escapeHtml(b.duration)}">
                         <div class="student-session-top"><span class="session-status ${statusClass}">${escapeHtml(b.status)}</span><span class="session-datetime">${escapeHtml(b.formatted)}</span>${price}</div>
                         <div class="student-educator-row"><div class="student-educator-avatar" aria-hidden="true">${escapeHtml(String(b.mentor || "E").trim().slice(0, 1).toUpperCase())}</div><div class="student-educator-copy"><strong>${escapeHtml(b.mentor)}</strong><span>${escapeHtml(b.topic || "Learning session")}</span></div></div>
                         <div class="student-session-focus"><span>SESSION TOPIC</span><p>${escapeHtml(b.notes || b.topic || "No session notes were added.")}</p></div>
                         <div class="student-session-actions">${joinBtn}${cancelBtn}</div>
                     </article>`;
                 }).join("");
-                filterSessions(document.querySelector(".session-tab.active")?.dataset.status || "upcoming");
-                const today = startOfDay(new Date());
-                const weekStartDate = weekStart(today); const weekEnd = new Date(weekStartDate); weekEnd.setDate(weekEnd.getDate() + 7);
-                const upcoming = meaningful.filter(b => ["pending", "accepted", "scheduled"].includes(b.status));
-                const todayCount = upcoming.filter(b => { const d = new Date(b.start_time); return d >= today && d < new Date(today.getTime() + 86400000); }).length;
-                const weekCount = upcoming.filter(b => { const d = new Date(b.start_time); return d >= today && d < weekEnd; }).length;
-                document.getElementById("upcomingCount")?.replaceChildren(String(upcoming.length));
+                filterSessions(document.querySelector(".session-tab.active")?.dataset.status || "upcoming", now);
+                const { today, tomorrow, weekStart, weekEnd } = sessionDateRanges(now);
+                const activeStarts = meaningful.filter(b => activeStatuses.includes(b.status)).map(b => Date.parse(b.start_time));
+                const upcoming = meaningful.filter(b =>
+                    isUpcomingOrInProgress(b.status, Date.parse(b.start_time), b.duration, now)).length;
+                const todayCount = activeStarts.filter(start => inRange(start, today, tomorrow)).length;
+                const weekCount = activeStarts.filter(start => inRange(start, weekStart, weekEnd)).length;
+                document.getElementById("upcomingCount")?.replaceChildren(String(upcoming));
                 document.getElementById("thisWeekCount")?.replaceChildren(String(weekCount));
                 document.getElementById("completedCount")?.replaceChildren(String(meaningful.filter(b => b.status === "completed").length));
-                document.querySelector('[data-filter-count="upcoming"]')?.replaceChildren(String(upcoming.length));
+                document.querySelector('[data-filter-count="upcoming"]')?.replaceChildren(String(upcoming));
                 document.querySelector('[data-filter-count="today"]')?.replaceChildren(String(todayCount));
                 document.querySelector('[data-filter-count="this-week"]')?.replaceChildren(String(weekCount));
             }
             const requests = bookings.filter(b => b.provider_id === window.L2UserId && b.status === "pending");
-            const upcoming = bookings.filter(b => b.provider_id === window.L2UserId && ["accepted","scheduled"].includes(b.status));
+            const upcoming = bookings.filter(b => b.provider_id === window.L2UserId
+                && confirmedStatuses.includes(b.status)
+                && isUpcomingOrInProgress(b.status, Date.parse(b.start_time), b.duration, now));
             const requestList = document.getElementById("mentorRequestList");
             const upcomingList = document.getElementById("mentorUpcomingList");
             if (requestList) requestList.innerHTML = requests.length ? requests.map(b => `<article class="mentor-request-card"><div class="mentor-request-details"><h3>${escapeHtml(b.student)} · ${escapeHtml(b.topic)}</h3><p>${escapeHtml(b.formatted)}</p><span>${escapeHtml(b.notes || "No note provided")}</span></div><div class="mentor-request-actions"><button class="session-action booking-action" data-id="${b.id}" data-action="accept">Accept</button><button class="session-action cancel-session-action booking-action" data-id="${b.id}" data-action="reject">Decline</button></div></article>`).join("") : '<p class="sessions-empty">No pending booking requests.</p>';

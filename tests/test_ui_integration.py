@@ -1,13 +1,13 @@
 import shutil
 import subprocess
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from __init__ import create_app
 from extensions import db
-from models import MentorAvailability, User
+from models import Appointment, MentorAvailability, User
 
 
 @pytest.fixture
@@ -125,6 +125,82 @@ def test_landing_progress_link_has_a_destination(app):
     assert b'href="#landing-features-title"' in landing.data
     assert b'id="landing-features-title"' in landing.data
     assert b"gamification-preview.html" not in landing.data
+
+
+def test_booking_api_serializes_existing_utc_time_without_shifting_it(app):
+    stored_start = datetime(2026, 11, 15, 16, 0)
+    with app.app_context():
+        learner = User(display_name="Learner", email="timezone-learner@example.test")
+        learner.roles = ["student"]
+        coach = User(display_name="Coach", email="timezone-coach@example.test")
+        coach.roles = ["coach"]
+        for user in (learner, coach):
+            user.set_password("StrongPassword1")
+        db.session.add_all([learner, coach])
+        db.session.flush()
+        appointment = Appointment(
+            student_id=learner.id, provider_id=coach.id, role="coach",
+            topic="Philippine midnight", start_time=stored_start, status="accepted",
+        )
+        db.session.add(appointment)
+        db.session.commit()
+        learner_id, appointment_id = learner.id, appointment.id
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = str(learner_id)
+        session["_fresh"] = True
+
+    response = client.get("/api/bookings")
+    assert response.status_code == 200
+    booking = response.json["bookings"][0]
+    assert booking["start_time"] == "2026-11-15T16:00:00+00:00"
+    assert datetime.fromisoformat(booking["start_time"]) == stored_start.replace(tzinfo=timezone.utc)
+    assert "Nov 16" in booking["formatted"]
+    with app.app_context():
+        assert db.session.get(Appointment, appointment_id).start_time == stored_start
+
+
+def test_booking_timezone_javascript():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the booking timezone tests")
+    subprocess.run([node, str(Path(__file__).with_name("booking_timezone.cjs"))], check=True)
+
+
+def test_in_progress_confirmed_booking_is_joinable_by_participants(app, monkeypatch):
+    start = datetime(2026, 11, 15, 16)
+    monkeypatch.setattr("routes.utcnow", lambda: start + timedelta(seconds=1))
+    with app.app_context():
+        learner = User(display_name="Learner", email="join-learner@example.test")
+        learner.roles = ["student"]
+        coach = User(display_name="Coach", email="join-coach@example.test")
+        coach.roles = ["coach"]
+        outsider = User(display_name="Outsider", email="join-outsider@example.test")
+        outsider.roles = ["student"]
+        for user in (learner, coach, outsider):
+            user.set_password("StrongPassword1")
+        db.session.add_all([learner, coach, outsider])
+        db.session.flush()
+        booking = Appointment(
+            student_id=learner.id, provider_id=coach.id, role="coach", topic="In progress",
+            start_time=start, duration_minutes=30, status="accepted", meeting_room="test-in-progress",
+        )
+        db.session.add(booking)
+        db.session.commit()
+        path = f"/api/sessions/{booking.id}/join"
+        meeting_path = f"/sessions/{booking.id}/meeting"
+        learner_id, coach_id, outsider_id = learner.id, coach.id, outsider.id
+
+    for user_id, status in [(learner_id, 200), (coach_id, 200), (outsider_id, 404)]:
+        client = app.test_client()
+        with client.session_transaction() as session:
+            session["_user_id"] = str(user_id)
+            session["_fresh"] = True
+        response = client.get(path)
+        assert response.status_code == status
+        if status == 200:
+            assert response.json["url"] == meeting_path
 
 
 def test_mode_switch_and_directory_javascript():

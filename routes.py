@@ -1205,7 +1205,8 @@ def list_my_bookings():
         "id": a.id, "student_id": a.student_id, "provider_id": a.provider_id,
         "student": a.student.display_name if a.student else "Student",
         "mentor": a.provider.display_name if a.provider else "Mentor",
-        "role": a.role, "topic": a.topic, "status": a.status, "start_time": a.start_time.isoformat(),
+        "role": a.role, "topic": a.topic, "status": a.status,
+        "start_time": a.start_time.replace(tzinfo=timezone.utc).isoformat(),
         "formatted": format_dt_pht(a.start_time), "duration": a.duration_minutes,
         "price": float(a.price) if a.price is not None else None, "notes": a.notes or "",
         "meeting_room": bool(a.meeting_room)

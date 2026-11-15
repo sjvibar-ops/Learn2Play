@@ -24,12 +24,14 @@
       if (!response.ok || !data.ok) throw new Error();
       const mine = (data.bookings || []).filter(b => b.provider_id === userId);
       const pending = mine.filter(b => b.status === "pending");
-      const upcoming = mine.filter(b => ["accepted", "scheduled"].includes(b.status));
+      const now = Date.now();
+      const upcoming = mine.filter(b => ["accepted", "scheduled"].includes(b.status) && Date.parse(b.start_time) > now);
       document.getElementById("mentorDashPendingCount").textContent = pending.length;
       document.getElementById("mentorDashUpcomingCount").textContent = upcoming.length;
       document.getElementById("mentorDashCompletedCount").textContent = mine.filter(b => b.status === "completed").length;
       requestList.innerHTML = pending.length ? pending.map(requestCard).join("") : '<div class="mentor-home-empty"><span aria-hidden="true">✓</span><strong>No pending requests</strong><small>New learner requests will appear here.</small></div>';
-      const next = upcoming.find(b => new Date(b.start_time) >= new Date());
+      // The booking API orders sessions by start time.
+      const next = upcoming[0];
       upcomingHost.innerHTML = next ? `<article class="mentor-home-next"><span class="mentor-home-next-date">${escape(next.formatted || "Scheduled")}</span><h3>${escape(next.student || "Learner")}</h3><p>${escape(next.topic || "Session")}</p><div><span>${escape(next.role === "coach" ? "Gaming coaching" : "Academic teaching")}</span>${next.price == null ? "" : `<strong>₱${Number(next.price).toLocaleString("en-PH", {minimumFractionDigits:2, maximumFractionDigits:2})}</strong>`}</div></article>` : '<div class="mentor-home-empty compact"><span aria-hidden="true">◷</span><strong>No upcoming sessions</strong><small>Your next confirmed session will appear here.</small></div>';
     } catch (_) {
       requestList.innerHTML = '<p class="mentor-home-error">Booking details could not be loaded.</p>';
