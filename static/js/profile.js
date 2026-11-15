@@ -19,7 +19,7 @@ async function loadUserData() {
     const navAvatarEl = document.getElementById("userAvatar");
     const emailEl = document.getElementById("profileEmail");
     const bioEl = document.getElementById("profileBio");
-    const topicsListEl = document.getElementById("profileTopicsList");
+    const topicsListEls = document.querySelectorAll("#profileTopicsList, #mentorTopicsDisplay");
     const menuName = document.getElementById("menuName");
     const menuEmail = document.getElementById("menuEmail");
     const menuRoles = document.getElementById("menuRoles");
@@ -31,6 +31,7 @@ async function loadUserData() {
 
     const teachingRateEl = document.getElementById("profileTeachingRate");
     const coachingRateEl = document.getElementById("profileCoachingRate");
+    const startingRateEl = document.getElementById("profileStartingRate");
 
     try {
         const response = await fetch("/api/me", {
@@ -63,10 +64,10 @@ async function loadUserData() {
             .toUpperCase() || "U";
 
         // Text updates
-        if (nameEl) nameEl.innerHTML = `${escapeHtml(name)} <span class="badge-verified">Verified User</span>`;
+        if (nameEl) nameEl.textContent = name;
         if (emailEl) emailEl.textContent = user.email || "";
         if (bioEl) {
-            bioEl.textContent = user.bio || "No introduction added yet. Click 'Edit Profile' to introduce yourself!";
+            bioEl.textContent = user.bio || "Add a short introduction so learners can get to know your teaching style.";
         }
         if (menuName) menuName.textContent = name;
         if (menuEmail) menuEmail.textContent = user.email || "";
@@ -86,9 +87,15 @@ async function loadUserData() {
                 coachingRateEl.innerHTML = `<em style="color: var(--txt3); font-weight: normal;">Not set</em>`;
             }
         }
+        if (startingRateEl) {
+            const primaryRate = user.teaching_rate ?? user.coaching_rate ?? user.hourly_rate;
+            startingRateEl.textContent = primaryRate !== null && primaryRate !== undefined
+                ? `₱${Number(primaryRate).toFixed(2)}` : "Not set";
+        }
 
         // Avatars
         renderAvatar(heroAvatarEl, user.profile_picture, initials);
+        renderAvatar(document.getElementById("editAvatarPreview"), user.profile_picture, initials);
         renderAvatar(navAvatarEl, user.profile_picture, initials.slice(0, 1));
 
         // Stats
@@ -102,22 +109,24 @@ async function loadUserData() {
         }
 
         // Topics
-        if (topicsListEl) {
-            topicsListEl.replaceChildren();
+        if (topicsListEls.length) {
             const topics = user.topics || [];
-            if (topics.length > 0) {
-                topics.forEach(t => {
-                    const pill = document.createElement("span");
-                    pill.className = "topic-pill user-topic";
-                    pill.textContent = t;
-                    topicsListEl.appendChild(pill);
-                });
-            } else {
-                const empty = document.createElement("p");
-                empty.className = "empty-hint";
-                empty.textContent = "No topics or games added yet. Click 'Edit Profile' to add them!";
-                topicsListEl.appendChild(empty);
-            }
+            topicsListEls.forEach(topicsListEl => {
+                topicsListEl.replaceChildren();
+                if (topics.length > 0) {
+                    topics.forEach(t => {
+                        const pill = document.createElement("span");
+                        pill.className = topicsListEl.id === "mentorTopicsDisplay" ? "mentor-tag" : "topic-pill user-topic";
+                        pill.textContent = t;
+                        topicsListEl.appendChild(pill);
+                    });
+                } else {
+                    const empty = document.createElement("p");
+                    empty.className = topicsListEl.id === "mentorTopicsDisplay" ? "mentor-empty" : "empty-hint";
+                    empty.textContent = "No specialties yet. Add them in Profile details.";
+                    topicsListEl.appendChild(empty);
+                }
+            });
         }
 
         // Role Badges
@@ -307,7 +316,9 @@ function updateBioCount() {
 
                 const heroAvatar = document.getElementById("profileAvatar");
                 const navAvatar = document.getElementById("userAvatar");
+                const editAvatar = document.getElementById("editAvatarPreview");
                 if (heroAvatar) heroAvatar.innerHTML = `<img src="${data.profile_picture}" alt="Avatar">`;
+                if (editAvatar) editAvatar.innerHTML = `<img src="${data.profile_picture}" alt="Avatar">`;
                 if (navAvatar) navAvatar.innerHTML = `<img src="${data.profile_picture}" alt="Avatar" class="avatar-img">`;
 
                 closeCropper();

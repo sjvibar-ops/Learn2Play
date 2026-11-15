@@ -1,0 +1,61 @@
+{# Browse Educators view, included by dashboard.html. Uses live data from /api/tutors. #}
+<section class="dashboard-search-hero browse-directory-hero hidden" aria-labelledby="browseEducatorsTitle">
+  <div class="search-hero-inner">
+    <a class="gp-primary-link gp-progress-return" href="{{ url_for('main.dashboard') }}">← Your progress</a>
+    <span class="browse-eyebrow"><span aria-hidden="true">✦</span> LEARN2PLAY EDUCATOR DIRECTORY</span>
+    <h1 id="browseEducatorsTitle">Find your next learning partner.</h1>
+    <p>Explore academic teachers and gaming coaches, then open a profile to see details and booking options.</p>
+    <label class="dash-search-box browse-search-box" for="searchInput">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.8-3.8"/></svg>
+      <input type="search" id="searchInput" placeholder="Search by educator, subject, or game…" autocomplete="off">
+    </label>
+    <div class="browse-quick-filters" role="group" aria-label="Suggested educator filters">
+      <span>Suggested:</span>
+      <button type="button" data-cat="academic">Academic teachers</button>
+      <button type="button" data-cat="gaming">Gaming coaches</button>
+      <button type="button" data-quick-rate="400">Under ₱400/hr</button>
+    </div>
+  </div>
+</section>
+
+<section class="tutor-grid-section browse-results-section hidden" aria-label="Browse educators">
+  <div class="browse-directory-layout">
+    <aside class="browse-control-panel" aria-label="Educator filters">
+      <div class="browse-control-topline">
+        <div><p class="browse-section-kicker">DIRECTORY FILTERS</p><h2>Browse category</h2></div>
+        <button class="browse-reset-btn" id="reset-filters" type="button">Reset</button>
+      </div>
+      <nav class="browse-category-nav" id="category-nav" aria-label="Educator category">
+        <button class="browse-category-btn side-item active" data-cat="all" type="button"><span>All educators</span><small data-category-count="all">0</small></button>
+        <button class="browse-category-btn side-item" data-cat="academic" type="button"><span>Academic teachers</span><small data-category-count="academic">0</small></button>
+        <button class="browse-category-btn side-item" data-cat="gaming" type="button"><span>Gaming coaches</span><small data-category-count="gaming">0</small></button>
+      </nav>
+      <div class="browse-filter-controls">
+        <label class="browse-rate-filter" for="price-range"><span>Maximum hourly rate</span><strong id="price-display">Any rate</strong><input id="price-range" type="range" min="0" max="50000" step="100" value="50000"></label>
+    <div class="browse-quick-filters" role="group" aria-label="Suggested educator filters">
+      <span>Suggested:</span>
+      <button type="button" data-cat="academic">Academic teachers</button>
+      <button type="button" data-cat="gaming">Gaming coaches</button>
+      <button type="button" data-quick-rate="400">Under ₱400/hr</button>
+    </div>
+        <label class="browse-sort-filter" for="sort-select"><span>Sort educators</span><select id="sort-select"><option value="recommended">Recommended</option><option value="rate-low">Rate: low to high</option><option value="rate-high">Rate: high to low</option><option value="name">Name: A to Z</option></select></label>
+    <div class="browse-quick-filters" role="group" aria-label="Suggested educator filters">
+      <span>Suggested:</span>
+      <button type="button" data-cat="academic">Academic teachers</button>
+      <button type="button" data-cat="gaming">Gaming coaches</button>
+      <button type="button" data-quick-rate="400">Under ₱400/hr</button>
+    </div>
+      </div>
+      <p class="browse-filter-note">Open an educator profile to review their listed specialties and available booking times.</p>
+    </aside>
+    <div class="browse-results-main">
+      <div class="browse-results-heading"><div><p class="browse-section-kicker">VERIFIED LEARN2PLAY DIRECTORY</p><h2>Educators for your next goal</h2></div><p class="browse-results-count" id="results-count" role="status" aria-live="polite">Loading educators…</p></div>
+      <div class="grid" id="tutorGrid" aria-live="polite"></div>
+      <div class="sessions-empty-box hidden browse-empty-state" id="emptyState">
+        <div class="empty-icon" aria-hidden="true">⌕</div>
+        <h3 id="emptyStateTitle">No educators yet</h3>
+        <p id="emptyStateMsg">Educators who are approved to teach will appear here.</p>
+      </div>
+    </div>
+  </div>
+</section>

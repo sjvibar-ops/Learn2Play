@@ -1,0 +1,23 @@
+{# Mentor and coach home, populated by the existing API. #}
+<section class="mentor-home" id="mentorHome" data-show-for="mentor coach" aria-labelledby="mentorHomeTitle">
+  <header class="mentor-home-heading">
+    <div><p class="mentor-home-eyebrow">LEARN2PLAY · EDUCATOR WORKSPACE</p><h1 id="mentorHomeTitle">Welcome, {{ current_user.display_name }}</h1><p>Manage learner requests, upcoming sessions, and your teaching availability.</p></div>
+    <div class="mentor-home-actions"><a class="mentor-home-secondary" href="{{ url_for('main.schedule') }}">Manage availability</a><a class="mentor-home-primary" href="{{ url_for('main.sessions') }}">Open sessions</a></div>
+  </header>
+  <section class="mentor-home-stats" aria-label="Teaching activity">
+    <article class="mentor-home-stat"><span>Pending requests</span><strong id="mentorDashPendingCount">0</strong><small>Waiting for your response</small></article>
+    <article class="mentor-home-stat"><span>Upcoming sessions</span><strong id="mentorDashUpcomingCount">0</strong><small>Confirmed bookings</small></article>
+    <article class="mentor-home-stat"><span>Completed sessions</span><strong id="mentorDashCompletedCount">0</strong><small>Finished lessons</small></article>
+  </section>
+  <div class="mentor-home-columns">
+    <section class="mentor-home-panel" aria-labelledby="mentorDashRequestsTitle">
+      <div class="mentor-home-panel-heading"><div><p class="mentor-home-eyebrow">NEEDS YOUR ATTENTION</p><h2 id="mentorDashRequestsTitle">Incoming requests</h2></div><a href="{{ url_for('main.sessions') }}">See all</a></div>
+      <div class="mentor-home-list" id="mentorDashRequestList"><p class="mentor-home-loading">Loading booking requests…</p></div>
+    </section>
+    <div class="mentor-home-side">
+      <section class="mentor-home-panel" aria-labelledby="mentorDashNextTitle"><div class="mentor-home-panel-heading"><div><p class="mentor-home-eyebrow">YOUR SCHEDULE</p><h2 id="mentorDashNextTitle">Next session</h2></div><span class="mentor-live-mark"><i></i> Live</span></div><div id="mentorDashNextSession"><p class="mentor-home-loading">Loading your schedule…</p></div><a class="mentor-home-text-link" href="{{ url_for('main.sessions') }}">View upcoming sessions →</a></section>
+      <section class="mentor-home-panel" aria-labelledby="mentorDashAvailabilityTitle"><div class="mentor-home-panel-heading"><div><p class="mentor-home-eyebrow">WEEKLY HOURS</p><h2 id="mentorDashAvailabilityTitle">Availability</h2></div><a href="{{ url_for('main.schedule') }}">Edit</a></div><div class="mentor-home-availability" id="mentorDashAvailability"><p class="mentor-home-loading">Loading availability…</p></div><a class="mentor-home-text-link" href="{{ url_for('main.schedule') }}">Manage availability →</a></section>
+    </div>
+  </div>
+  <p class="mentor-home-feedback" id="mentorDashFeedback" role="status" aria-live="polite"></p>
+</section>

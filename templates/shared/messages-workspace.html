@@ -1,0 +1,67 @@
+<!-- ===== Messages Workspace ===== -->
+  <section class="messages-context-bar" aria-label="Messages workspace">
+    <div class="messages-context-icon" aria-hidden="true">▣</div>
+    <div><h1>Comms &amp; Session Coordination Hub</h1><p>Peer conversations and session coordination</p></div>
+    <span class="messages-context-tag">Live conversations</span>
+  </section>
+  <div class="chat-shell">
+
+    <!-- Left: thread list -->
+    <aside class="chat-sidebar">
+      <div class="chat-sidebar-header">
+        <h2>Messages</h2>
+      </div>
+
+      <!-- Tabs: Peer / Sessions -->
+      <div class="chat-tabs">
+        {% if can_peer_chat %}
+        <button class="chat-tab active" id="tabPeer" data-tab="peer">
+          Peer Chat <span class="tab-badge hidden" id="peerBadge"></span>
+        </button>
+        {% endif %}
+        <button class="chat-tab{% if not can_peer_chat %} active{% endif %}" id="tabSession" data-tab="session">
+          Sessions <span class="tab-badge hidden" id="sessionBadge"></span>
+        </button>
+      </div>
+      <label class="thread-search"><span aria-hidden="true">⌕</span><input id="threadSearch" type="search" placeholder="Search messages, mentors, or topics…" aria-label="Search conversations"></label>
+
+      <!-- New peer chat button (only on Peer tab) -->
+      {% if can_peer_chat %}
+      <button class="new-chat-btn" id="newChatBtn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        New conversation
+      </button>
+      {% endif %}
+
+      <div class="thread-list" id="threadList">
+        <div class="thread-empty"><div class="ei">💬</div>No conversations yet.</div>
+      </div>
+    </aside>
+
+    <!-- Right: chat window -->
+    <div class="chat-window" id="chatWindow">
+      <!-- Welcome state (default) -->
+      <div class="chat-welcome" id="chatWelcome">
+        <div class="wi">💬</div>
+        <h3>Your Messages</h3>
+        <p>{% if can_peer_chat %}Select a conversation from the left, or start a new peer chat with a fellow student.{% else %}Select a session conversation from the left to view your messages.{% endif %}</p>
+      </div>
+    </div>
+    <aside class="chat-context-sidebar" id="chatContextSidebar" aria-label="Conversation details">
+      <section class="chat-context-card" id="chatContextContent">
+        <p class="context-eyebrow">SESSION CONTEXT</p>
+        <div class="context-empty-icon" aria-hidden="true">▣</div>
+        <h2>Conversation details</h2>
+        <p class="context-empty-copy">Choose a session conversation to see its booking details here.</p>
+      </section>
+      <section class="chat-context-card chat-guidelines-card">
+        <p class="context-eyebrow">CHAT REMINDERS</p>
+        <h2>Keep your chat helpful</h2>
+        <ul>
+          <li>Keep messages related to your learning or session.</li>
+          <li>Use the report option if you need to flag a concern.</li>
+          <li>Never share passwords or account codes in chat.</li>
+        </ul>
+      </section>
+    </aside>
+  </div>

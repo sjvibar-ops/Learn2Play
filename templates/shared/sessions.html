@@ -23,17 +23,17 @@
         <div id="studentSessionsView">
             <div class="sessions-heading">
                 <div>
-                    <p class="settings-eyebrow">YOUR LEARNING SCHEDULE</p>
-                    <h1>My Sessions</h1>
-                    <p>Keep track of your scheduled tutoring and gaming coaching lessons.</p>
+                    <p class="settings-eyebrow">LEARNER WORKSPACE</p>
+                    <h1>Upcoming Sessions &amp; Lessons</h1>
+                    <p>Review your bookings, prepare for lessons, and join confirmed sessions.</p>
                 </div>
-                <a class="edit-profile-btn sessions-book-btn" href="{{ url_for('main.dashboard') }}">Find a mentor</a>
+                <a class="edit-profile-btn sessions-book-btn" href="{{ url_for('main.dashboard', view='browse') }}">Find an educator</a>
             </div>
 
             <!-- Summary Cards (Reset to 0) -->
             <section class="session-summary" aria-label="Session summary">
                 <div class="session-summary-card">
-                    <span class="session-summary-label">Upcoming</span>
+                    <span class="session-summary-label">Upcoming sessions</span>
                     <strong id="upcomingCount">0</strong>
                     <small>sessions scheduled</small>
                 </div>
@@ -50,15 +50,22 @@
             </section>
 
             <!-- Schedule Panel -->
+            <div class="student-session-layout">
             <section class="sessions-panel settings-panel" aria-labelledby="schedule-heading">
                 <div class="sessions-panel-heading">
                     <div>
-                        <h2 id="schedule-heading">Your Schedule</h2>
-                        <p>Review your active bookings and lesson history.</p>
+                        <h2 id="schedule-heading">Your learning schedule</h2>
+                        <p>Track your next sessions and revisit completed lessons.</p>
                     </div>
-                    <div class="session-tabs" role="tablist" aria-label="Filter sessions">
-                        <button class="session-tab active" type="button" data-status="upcoming" role="tab" aria-selected="true">Upcoming</button>
-                        <button class="session-tab" type="button" data-status="completed" role="tab" aria-selected="false">Past sessions</button>
+                    <div class="session-controls">
+                        <div class="session-tabs" role="tablist" aria-label="Filter sessions">
+                            <button class="session-tab active" type="button" data-status="upcoming" role="tab" aria-selected="true">All upcoming <span data-filter-count="upcoming">0</span></button>
+                            <button class="session-tab" type="button" data-status="today" role="tab" aria-selected="false">Today <span data-filter-count="today">0</span></button>
+                            <button class="session-tab" type="button" data-status="this-week" role="tab" aria-selected="false">This week <span data-filter-count="this-week">0</span></button>
+                            <button class="session-tab" type="button" data-status="past" role="tab" aria-selected="false">Past</button>
+                            <button class="session-tab" type="button" data-status="cancelled" role="tab" aria-selected="false">Cancelled</button>
+                        </div>
+                        <label class="session-search"><span aria-hidden="true">⌕</span><input id="sessionSearch" type="search" placeholder="Search educator or topic" aria-label="Search sessions"></label>
                     </div>
                 </div>
 
@@ -70,11 +77,31 @@
                 <!-- Empty State Message -->
                 <div class="sessions-empty-box" id="sessionsEmpty">
                     <div class="empty-icon">📅</div>
-                    <h3>No scheduled sessions yet</h3>
-                    <p>You haven't booked any academic tutors or gaming coaches yet. Browse our verified mentors to schedule your first 1-on-1 session!</p>
-                    <a href="{{ url_for('main.dashboard') }}" class="view-btn" style="margin-top: 12px; display: inline-block;">Browse Mentors &rarr;</a>
+                    <h3>No sessions in this view</h3>
+                    <p>Your bookings will appear here. Choose another filter or browse educators to schedule a lesson.</p>
+                    <a href="{{ url_for('main.dashboard', view='browse') }}" class="view-btn" style="margin-top: 12px; display: inline-block;">Browse educators &rarr;</a>
                 </div>
             </section>
+            <aside class="student-session-guide" aria-label="Session guide">
+                <section class="session-guide-card">
+                    <div class="session-guide-icon" aria-hidden="true">▣</div>
+                    <h2>Getting ready for a session</h2>
+                    <p class="session-guide-intro">A few quick steps to help your lesson go smoothly.</p>
+                    <ol class="session-guide-steps">
+                        <li><span>1</span><div><strong>Check your booking</strong><small>Pending requests are waiting for the educator to respond.</small></div></li>
+                        <li><span>2</span><div><strong>Prepare a topic</strong><small>Keep your questions or goals ready for the session.</small></div></li>
+                        <li><span>3</span><div><strong>Join when confirmed</strong><small>The join button appears for confirmed sessions.</small></div></li>
+                    </ol>
+                    <a class="session-guide-link" href="{{ url_for('main.help') }}">Need help? Visit Help <span aria-hidden="true">→</span></a>
+                </section>
+                <section class="session-guide-card session-status-guide">
+                    <h2>Booking status</h2>
+                    <p><span class="guide-status-dot pending"></span><strong>Pending</strong><small>Waiting for educator response</small></p>
+                    <p><span class="guide-status-dot confirmed"></span><strong>Accepted</strong><small>Confirmed and ready to attend</small></p>
+                    <p><span class="guide-status-dot finished"></span><strong>Completed</strong><small>Session has finished</small></p>
+                </section>
+            </aside>
+            </div>
         </div>
 
         <!-- ================= MENTOR WORKSPACE (For Teachers & Coaches) ================= -->

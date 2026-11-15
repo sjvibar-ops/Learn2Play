@@ -29,39 +29,65 @@
         })
         .catch(() => setRoleView(initialMode));
 
-    // 2. Tab switching between Upcoming & Past sessions
+    // 2. Filter and search learner bookings.
+    let activeFilter = "upcoming";
+    const searchInput = document.getElementById("sessionSearch");
+    const startOfDay = value => { const d = new Date(value); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); };
+    const weekStart = value => { const d = startOfDay(value); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; };
+
     tabs.forEach(tab => {
         tab.addEventListener("click", () => {
-            const status = tab.dataset.status;
-
             tabs.forEach(item => {
-                const isActive = item === tab;
-                item.classList.toggle("active", isActive);
-                item.setAttribute("aria-selected", String(isActive));
+                const selected = item === tab;
+                item.classList.toggle("active", selected);
+                item.setAttribute("aria-selected", String(selected));
             });
-
-            filterSessions(status);
+            filterSessions(tab.dataset.status);
         });
     });
 
-    function filterSessions(status) {
-        const sessions = sessionList ? sessionList.querySelectorAll(".scheduled-session") : [];
+    searchInput?.addEventListener("input", () => filterSessions(activeFilter));
+
+    function filterSessions(status = activeFilter) {
+        activeFilter = status;
+        const cards = sessionList ? [...sessionList.querySelectorAll(".scheduled-session")] : [];
+        const query = (searchInput?.value || "").trim().toLocaleLowerCase();
+        const now = new Date();
+        const today = startOfDay(now);
+        const nextWeek = new Date(weekStart(now)); nextWeek.setDate(nextWeek.getDate() + 7);
         let visibleCount = 0;
 
-        sessions.forEach(card => {
-            const match = card.dataset.status === status;
-            card.style.display = match ? "grid" : "none";
-            if (match) visibleCount++;
+        cards.forEach(card => {
+            const state = card.dataset.bookingStatus;
+            const start = new Date(card.dataset.startTime);
+            const isPast = state === "completed" || state === "rejected";
+            const isCancelled = state === "cancelled";
+            const isActive = !isPast && !isCancelled;
+            const matchesFilter = status === "upcoming" ? isActive
+                : status === "today" ? isActive && start >= today && start < new Date(today.getTime() + 86400000)
+                : status === "this-week" ? isActive && start >= today && start < nextWeek
+                : status === "past" ? isPast
+                : status === "cancelled" ? isCancelled : true;
+            const matchesSearch = !query || card.textContent.toLocaleLowerCase().includes(query);
+            const visible = matchesFilter && matchesSearch;
+            card.hidden = !visible;
+            if (visible) visibleCount++;
         });
 
-        // Show empty message if no sessions match
+        const noBookings = cards.length === 0;
         if (emptyBox) {
-            emptyBox.style.display = visibleCount === 0 ? "flex" : "none";
+            emptyBox.hidden = visibleCount > 0;
+            emptyBox.classList.toggle("sessions-filter-empty", !noBookings);
+            const title = emptyBox.querySelector("h3");
+            const message = emptyBox.querySelector("p");
+            const browseLink = emptyBox.querySelector("a");
+            if (title) title.textContent = noBookings ? "No sessions scheduled yet" : "No sessions match this view";
+            if (message) message.textContent = noBookings
+                ? "Your bookings will appear here. Browse educators to schedule your first lesson."
+                : "Try another filter or search term to find a session.";
+            if (browseLink) browseLink.hidden = !noBookings;
         }
     }
-
-    // Initial filter check
-    filterSessions("upcoming");
 
     // 3. Dropdown Menu & Logout
     const menu = document.getElementById("profileMenu");
@@ -127,44 +153,29 @@
                 const mine = bookings.filter(b => b.student_id === window.L2UserId);
                 const meaningful = mine.filter(b => ["pending", "accepted", "scheduled", "completed", "cancelled", "rejected"].includes(b.status));
                 sessionList.innerHTML = meaningful.map(b => {
-                    const isPast = ["completed","cancelled","rejected"].includes(b.status);
-                    const statusClass =
-                        b.status === "accepted"  ? "status-accepted"  :
-                        b.status === "scheduled" ? "status-scheduled" :
-                        b.status === "pending"   ? "status-pending"   :
-                        b.status === "completed" ? "status-completed" :
-                        "status-cancelled";
-                    const joinBtn   = (b.status === "accepted" || b.status === "scheduled")
-                        ? `<button class="session-action join-session" data-id="${b.id}">Join Session</button>` : "";
-                    const cancelBtn = ["pending","accepted","scheduled"].includes(b.status)
-                        ? `<button class="session-action cancel-booking" data-id="${b.id}">Cancel</button>` : "";
-                    return `
-                        <article class="scheduled-session" data-status="${isPast ? "completed" : "upcoming"}">
-                            <div class="session-details">
-                                <div class="session-info-top">
-                                    <div class="session-who">
-                                        <strong class="session-mentor-name">${escapeHtml(b.mentor)}</strong>
-                                        <span class="session-datetime">${escapeHtml(b.formatted)}</span>
-                                    </div>
-                                    <span class="session-status ${statusClass}">${escapeHtml(b.status)}</span>
-                                </div>
-                                <div class="session-topic-row">
-                                    <span class="session-topic-label">Topic</span>
-                                    <span class="session-topic-name">${escapeHtml(b.topic)}</span>
-                                </div>
-                                ${b.notes ? `<p class="session-notes">${escapeHtml(b.notes)}</p>` : ""}
-                            </div>
-                            <div class="session-actions-buttons">
-                                ${joinBtn}
-                                ${cancelBtn}
-                            </div>
-                        </article>`;
+                    const statusClass = b.status === "accepted" ? "status-accepted" : b.status === "scheduled" ? "status-scheduled" : b.status === "pending" ? "status-pending" : b.status === "completed" ? "status-completed" : "status-cancelled";
+                    const joinBtn = (b.status === "accepted" || b.status === "scheduled") ? `<button class="session-action join-session" data-id="${b.id}">Join session</button>` : "";
+                    const cancelBtn = ["pending", "accepted", "scheduled"].includes(b.status) ? `<button class="session-action cancel-booking" data-id="${b.id}">Cancel booking</button>` : "";
+                    const price = b.price === null || b.price === undefined ? "" : `<strong class="session-price">₱${Number(b.price).toLocaleString("en-PH", {minimumFractionDigits: 2, maximumFractionDigits: 2})}<small> session rate</small></strong>`;
+                    return `<article class="scheduled-session student-session-card" data-booking-status="${escapeHtml(b.status)}" data-start-time="${escapeHtml(b.start_time)}">
+                        <div class="student-session-top"><span class="session-status ${statusClass}">${escapeHtml(b.status)}</span><span class="session-datetime">${escapeHtml(b.formatted)}</span>${price}</div>
+                        <div class="student-educator-row"><div class="student-educator-avatar" aria-hidden="true">${escapeHtml(String(b.mentor || "E").trim().slice(0, 1).toUpperCase())}</div><div class="student-educator-copy"><strong>${escapeHtml(b.mentor)}</strong><span>${escapeHtml(b.topic || "Learning session")}</span></div></div>
+                        <div class="student-session-focus"><span>SESSION TOPIC</span><p>${escapeHtml(b.notes || b.topic || "No session notes were added.")}</p></div>
+                        <div class="student-session-actions">${joinBtn}${cancelBtn}</div>
+                    </article>`;
                 }).join("");
                 filterSessions(document.querySelector(".session-tab.active")?.dataset.status || "upcoming");
-                const upcoming = meaningful.filter(b => ["pending","accepted","scheduled"].includes(b.status)).length;
-                const completed = meaningful.filter(b => b.status === "completed").length;
-                document.getElementById("upcomingCount")?.replaceChildren(String(upcoming));
-                document.getElementById("completedCount")?.replaceChildren(String(completed));
+                const today = startOfDay(new Date());
+                const weekStartDate = weekStart(today); const weekEnd = new Date(weekStartDate); weekEnd.setDate(weekEnd.getDate() + 7);
+                const upcoming = meaningful.filter(b => ["pending", "accepted", "scheduled"].includes(b.status));
+                const todayCount = upcoming.filter(b => { const d = new Date(b.start_time); return d >= today && d < new Date(today.getTime() + 86400000); }).length;
+                const weekCount = upcoming.filter(b => { const d = new Date(b.start_time); return d >= today && d < weekEnd; }).length;
+                document.getElementById("upcomingCount")?.replaceChildren(String(upcoming.length));
+                document.getElementById("thisWeekCount")?.replaceChildren(String(weekCount));
+                document.getElementById("completedCount")?.replaceChildren(String(meaningful.filter(b => b.status === "completed").length));
+                document.querySelector('[data-filter-count="upcoming"]')?.replaceChildren(String(upcoming.length));
+                document.querySelector('[data-filter-count="today"]')?.replaceChildren(String(todayCount));
+                document.querySelector('[data-filter-count="this-week"]')?.replaceChildren(String(weekCount));
             }
             const requests = bookings.filter(b => b.provider_id === window.L2UserId && b.status === "pending");
             const upcoming = bookings.filter(b => b.provider_id === window.L2UserId && ["accepted","scheduled"].includes(b.status));
@@ -208,3 +219,4 @@
         btn.addEventListener("click", () => { window.location.href = "/schedule#availabilityForm"; });
     });
 })();
+

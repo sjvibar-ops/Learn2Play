@@ -373,6 +373,11 @@ if (gamificationPreview) {
   const emptyTitle = document.getElementById("emptyStateTitle");
   const emptyMsg = document.getElementById("emptyStateMsg");
   const searchInput = document.getElementById("searchInput");
+  const priceRange = document.getElementById("price-range");
+  const priceDisplay = document.getElementById("price-display");
+  const sortSelect = document.getElementById("sort-select");
+  const resultsCount = document.getElementById("results-count");
+  const resetFilters = document.getElementById("reset-filters");
 
   if (!grid) return; // not on dashboard
 
@@ -545,9 +550,9 @@ updateSidebarSchedule(null, null);
         '<div class="card-body">' +
           '<div class="card-name">' + esc(t.name) + "</div>" +
           '<div class="card-subject">' + esc(topicsText) + "</div>" +
-          '<div class="card-stars"><span class="stars">' + starsSVG(rating) +
-            '</span><span class="rating">' + rating.toFixed(1) + "</span>" +
-            '<span class="reviews">(' + esc(t.reviews || 0) + " reviews)</span></div>" +
+          (Number(t.reviews || 0) > 0
+            ? '<div class="card-stars"><span class="stars">' + starsSVG(rating) + '</span><span class="rating">' + rating.toFixed(1) + '</span><span class="reviews">(' + esc(t.reviews) + ' reviews)</span></div>'
+            : '<div class="card-stars"><span class="reviews">New educator · No reviews yet</span></div>') +
           '<p class="card-desc">' + esc(t.bio) + "</p>" +
           '<div class="card-footer">' +
             '<span class="price-lg">₱' + esc(price) + "/hr</span>" +
@@ -558,18 +563,34 @@ updateSidebarSchedule(null, null);
     );
   }
 
-  const state = { category: "all", query: "" };
+  const state = { category: "all", query: "", maxRate: Number(priceRange?.value || 50000), sort: "recommended" };
+
+  function updateBrowseCounts() {
+    const countFor = category => TUTORS.filter(t => category === "all" || t.category === category || t.category === "both").length;
+    document.querySelectorAll("[data-category-count]").forEach(node => {
+      node.textContent = String(countFor(node.dataset.categoryCount));
+    });
+  }
 
   function render() {
-    const list = TUTORS.filter((t) => {
+    let list = TUTORS.filter((t) => {
       if (state.category !== "all" && t.category !== state.category && t.category !== "both") return false;
-      
+      const rate = Number(t.price ?? 0);
+      if (rate > state.maxRate) return false;
       const q = state.query.toLowerCase();
       if (!q) return true;
-
       const topicsStr = (t.topics || []).join(" ").toLowerCase();
       return t.name.toLowerCase().includes(q) || (t.bio || "").toLowerCase().includes(q) || topicsStr.includes(q);
     });
+
+    if (state.sort === "rate-low") list.sort((a, b) => Number(a.price || 0) - Number(b.price || 0));
+    if (state.sort === "rate-high") list.sort((a, b) => Number(b.price || 0) - Number(a.price || 0));
+    if (state.sort === "name") list.sort((a, b) => a.name.localeCompare(b.name));
+    updateBrowseCounts();
+    if (resultsCount) resultsCount.textContent = loadError ? "Educators unavailable" : `${list.length} educator${list.length === 1 ? "" : "s"} shown`;
+    if (priceDisplay && priceRange) {
+      priceDisplay.textContent = Number(priceRange.value) >= 50000 ? "Any rate" : `Up to ₱${Number(priceRange.value).toLocaleString("en-PH")}/hr`;
+    }
 
     if (list.length === 0) {
       grid.innerHTML = "";
@@ -611,7 +632,7 @@ updateSidebarSchedule(null, null);
 
   function setCategory(cat) {
     state.category = cat;
-    document.querySelectorAll(".side-item[data-cat]").forEach((b) => {
+    document.querySelectorAll("[data-cat]").forEach((b) => {
       b.classList.toggle("active", b.dataset.cat === cat);
     });
 
@@ -621,9 +642,35 @@ updateSidebarSchedule(null, null);
     render();
   }
 
-  // Sidebar category filter clicks
-  document.querySelectorAll(".side-item[data-cat]").forEach((btn) => {
+  // Sidebar and hero category filters share the same live directory state.
+  document.querySelectorAll("[data-cat]").forEach((btn) => {
     btn.addEventListener("click", () => setCategory(btn.dataset.cat));
+  });
+  document.querySelectorAll("[data-quick-rate]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!priceRange) return;
+      priceRange.value = String(Math.min(Number(btn.dataset.quickRate), Number(priceRange.max)));
+      state.maxRate = Number(priceRange.value);
+      render();
+    });
+  });
+
+  priceRange?.addEventListener("input", () => {
+    state.maxRate = Number(priceRange.value);
+    render();
+  });
+  sortSelect?.addEventListener("change", () => {
+    state.sort = sortSelect.value;
+    render();
+  });
+  resetFilters?.addEventListener("click", () => {
+    state.category = "all";
+    state.query = "";
+    state.sort = "recommended";
+    if (searchInput) searchInput.value = "";
+    if (priceRange) priceRange.value = priceRange.max;
+    if (sortSelect) sortSelect.value = "recommended";
+    setCategory("all");
   });
 
   // Live search from the main page search bar

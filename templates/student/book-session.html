@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <title>Book a session with {{ tutor.display_name }} | Learn2Play</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/booking.css') }}">
+</head>
+<body>
+  <header class="book-topbar">
+    <a class="brand" href="{{ url_for('main.dashboard') }}"><span class="brand-mark">L2</span><span>Learn<span>2</span>Play<small>ACADEMY &amp; ESPORTS</small></span></a>
+    <nav aria-label="Main navigation"><a href="{{ url_for('main.dashboard') }}">Dashboard</a><a href="{{ url_for('main.dashboard', view='browse') }}">Browse educators</a><a class="active" href="{{ url_for('main.sessions') }}">My sessions</a><a href="{{ url_for('main.messages_page') }}">Messages</a></nav>
+    <a class="user-chip" href="{{ url_for('main.profile') }}"><span>{{ current_user.display_name[:1]|upper if current_user.display_name else 'S' }}</span>{{ current_user.display_name or 'Student' }}</a>
+  </header>
+  <main class="book-shell" id="bookingPage" data-tutor-id="{{ tutor.id }}" data-selected-role="{{ 'mentor' if is_mentor else 'coach' }}" data-mentor-rate="{{ tutor.teaching_rate if tutor.teaching_rate is not none else (tutor.hourly_rate or '') }}" data-coach-rate="{{ tutor.coaching_rate if tutor.coaching_rate is not none else (tutor.hourly_rate or '') }}">
+    <div class="book-heading">
+      <div><a class="back-link" href="{{ url_for('main.view_tutor_profile', user_id=tutor.id) }}">← Back to {{ tutor.display_name }}’s profile</a><p class="eyebrow">STUDENT PORTAL <span>·</span> NEW BOOKING</p><h1>Plan your next session</h1><p class="heading-copy">Choose a time that works, then tell your educator what you’d like to cover.</p></div>
+      <div class="timezone-pill"><i></i> Philippine Time <span>UTC+8</span></div>
+    </div>
+    <section class="educator-banner">
+      <div class="educator-avatar">{% if tutor.profile_picture %}<img src="{{ tutor.profile_picture }}" alt="">{% else %}{{ tutor.display_name[:2]|upper }}{% endif %}</div>
+      <div class="educator-info"><span class="eyebrow">YOUR EDUCATOR</span><h2>{{ tutor.display_name }}</h2><p>{% if is_mentor and is_coach %}Academic tutor &amp; gaming coach{% elif is_mentor %}Academic tutor{% else %}Gaming coach{% endif %}</p></div>
+      <div class="rate-box"><strong id="sessionRate">{% if is_mentor and tutor.teaching_rate is not none %}₱{{ '%.2f'|format(tutor.teaching_rate) }}{% elif is_coach and tutor.coaching_rate is not none %}₱{{ '%.2f'|format(tutor.coaching_rate) }}{% elif tutor.hourly_rate is not none %}₱{{ '%.2f'|format(tutor.hourly_rate) }}{% else %}Rate not set{% endif %}</strong><span>per 60-minute session</span></div>
+    </section>
+    <div class="booking-layout">
+      <div class="booking-main">
+        <section class="booking-card">
+          {% if is_mentor and is_coach %}
+          <div class="track-picker"><div class="section-title"><span class="step">00</span><div><h2>Choose a session track</h2><p>Select the type of support you want today.</p></div></div><div class="track-options"><button type="button" class="track-option selected" data-role="mentor"><span>▤</span><span><strong>Academic tutoring</strong><small>Work through a subject or study goal</small></span></button><button type="button" class="track-option" data-role="coach"><span>⌘</span><span><strong>Gaming coaching</strong><small>Practice skills, strategy, or gameplay</small></span></button></div></div>
+          {% endif %}
+          <div class="section-title"><span class="step">01</span><div><h2>Choose a subject</h2><p>Pick a specialty to help your educator prepare.</p></div></div>
+          <div class="topic-list" id="topicList">
+            {% if tutor.topics %}{% for topic in tutor.topics %}<button type="button" class="topic-chip{% if loop.first %} selected{% endif %}" data-topic="{{ topic }}">{{ topic }}</button>{% endfor %}{% else %}<p class="empty-copy">This educator hasn’t added specialties yet. You can enter a topic below.</p>{% endif %}
+          </div>
+          <label class="field-label" for="bookingTopic">Session topic <span>Required</span></label>
+          <input class="text-input" id="bookingTopic" maxlength="120" value="{{ tutor.topics[0] if tutor.topics else '' }}" placeholder="e.g. Algebra, Valorant aim practice" required>
+          <div class="section-title date-title"><span class="step">02</span><div><h2>Select a date and time</h2><p>Available times come directly from your educator’s schedule.</p></div></div>
+          <div class="calendar-toolbar"><button id="prevWeek" type="button" aria-label="Previous week">‹</button><strong id="calendarLabel">Loading dates…</strong><button id="nextWeek" type="button" aria-label="Next week">›</button></div>
+          <div class="date-grid" id="dateGrid" aria-label="Choose a date"></div>
+          <div class="slots-heading"><h3 id="slotsTitle">Choose a date</h3><span>PHT · 60 minutes</span></div>
+          <div class="slot-grid" id="slotGrid"><p class="empty-copy">Select a date to see available times.</p></div>
+        </section>
+        <section class="booking-card">
+          <div class="section-title"><span class="step">03</span><div><h2>Share your goals</h2><p>A little context helps make the session useful from the start.</p></div></div>
+          <label class="field-label" for="learningGoal">What would you like to work on? <span>Optional</span></label>
+          <textarea class="text-input" id="learningGoal" rows="4" maxlength="850" placeholder="Share a question, goal, or area where you’d like help…"></textarea>
+          <div class="input-meta"><span>Links are optional and will be shared with your educator.</span><span id="goalCount">0 / 850</span></div>
+          <label class="field-label link-label" for="resourceLink">Study material or clip link <span>Optional</span></label>
+          <input class="text-input" id="resourceLink" type="url" maxlength="500" placeholder="https://…">
+          <p class="delivery-note"><span>◉</span> Sessions take place online through Learn2Play’s session room after the educator accepts your request.</p>
+        </section>
+      </div>
+      <aside class="booking-aside">
+        <section class="summary-card"><div class="summary-accent"></div><div class="summary-title"><h2>Booking summary</h2><span>REQUEST</span></div>
+          <div class="summary-person"><div class="educator-avatar small">{% if tutor.profile_picture %}<img src="{{ tutor.profile_picture }}" alt="">{% else %}{{ tutor.display_name[:2]|upper }}{% endif %}</div><div><strong>{{ tutor.display_name }}</strong><span>Learn2Play educator</span></div></div>
+          <dl class="summary-details"><div><dt>Session topic</dt><dd id="summaryTopic">{{ tutor.topics[0] if tutor.topics else 'Choose a topic' }}</dd></div><div><dt>Date &amp; time</dt><dd id="summaryDate">Choose an available time</dd></div><div><dt>Format</dt><dd>Online · 60 minutes</dd></div></dl>
+          <div class="price-summary"><span>Session rate</span><strong id="summaryRate">{% if is_mentor and tutor.teaching_rate is not none %}₱{{ '%.2f'|format(tutor.teaching_rate) }}{% elif is_coach and tutor.coaching_rate is not none %}₱{{ '%.2f'|format(tutor.coaching_rate) }}{% elif tutor.hourly_rate is not none %}₱{{ '%.2f'|format(tutor.hourly_rate) }}{% else %}Rate not set{% endif %}</strong><small>The educator confirms the final session details.</small></div>
+          <div class="notice"><span>ⓘ</span><p>Your request is sent to the educator for approval. No payment is collected on this screen.</p></div>
+          <p class="feedback" id="bookingFeedback" role="status" aria-live="polite"></p>
+          <button class="submit-booking" id="submitBooking" type="button">Send booking request <span>→</span></button>
+          <a class="cancel-link" href="{{ url_for('main.view_tutor_profile', user_id=tutor.id) }}">Cancel and return to profile</a>
+        </section>
+        <div class="help-card"><strong>Need to change plans?</strong><p>You can manage or cancel your request from My Sessions.</p><a href="{{ url_for('main.sessions') }}">View my sessions →</a></div>
+      </aside>
+    </div>
+  </main>
+  <script src="{{ url_for('static', filename='js/booking.js') }}" defer></script>
+</body>
+</html>

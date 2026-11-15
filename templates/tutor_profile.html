@@ -1,188 +1,78 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>{{ tutor.display_name }} | Learn2Play Educator</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/tutor-profile.css') }}">
 </head>
-<body class="dashboard">
-
-  <!-- Top Navbar -->
+<body class="dashboard tutor-profile-body">
   <header class="topbar">
-    <a class="tb-brand" href="{{ url_for('main.dashboard') }}">
-      <div class="logo">L2</div>
-      <span class="brand-name">Learn2Play</span>
-    </a>
-
+    <a class="tb-brand" href="{{ url_for('main.dashboard') }}"><div class="logo">L2</div><span class="brand-name">Learn2Play</span></a>
     <nav class="tb-nav" aria-label="Main navigation">
       <a href="{{ url_for('main.dashboard') }}">Dashboard</a>
-      {% if current_user.is_authenticated and ('mentor' in current_user.roles or 'coach' in current_user.roles) %}
-        <a href="{{ url_for('main.schedule') }}">Schedule</a>
-      {% endif %}
+      <a class="active" href="{{ url_for('main.dashboard', view='browse') }}">Browse educators</a>
       <a href="{{ url_for('main.sessions') }}">My Sessions</a>
-      {% if current_user.is_authenticated and not current_user.is_admin %}
-        <a href="{{ url_for('main.messages_page') }}">Messages</a>
-      {% endif %}
-      <a href="{{ url_for('main.profile') }}">Profile</a>
-      <a href="{{ url_for('main.settings') }}">Settings</a>
-      <a href="{{ url_for('main.help') }}">Help</a>
+      {% if 'mentor' in current_user.roles or 'coach' in current_user.roles %}<a href="{{ url_for('main.schedule') }}">Schedule</a>{% endif %}
+      <a href="{{ url_for('main.messages_page') }}">Messages</a>
     </nav>
-
-    <div class="tb-right">
-      <div class="tb-profile" id="profileMenu">
-        <button class="tb-avatar" id="userAvatar" type="button">
-          {% if current_user.is_authenticated and current_user.profile_picture %}
-            <img src="{{ current_user.profile_picture }}" alt="Avatar" class="avatar-img">
-          {% else %}
-            {{ current_user.display_name[:1] | upper if current_user.is_authenticated and current_user.display_name else 'U' }}
-          {% endif %}
-        </button>
-      </div>
-    </div>
+    <div class="tb-right"><a class="tprofile-user" href="{{ url_for('main.profile') }}"><span>{% if current_user.profile_picture %}<img src="{{ current_user.profile_picture }}" alt="">{% else %}{{ current_user.display_name[:1]|upper if current_user.display_name else 'U' }}{% endif %}</span><b>{{ current_user.display_name or 'Account' }}</b></a></div>
   </header>
 
-  <!-- Public Mentor Profile Container -->
-  <main class="mentor-profile-page">
-    <a href="{{ url_for('main.dashboard') }}" class="settings-back-btn back-dashboard-btn">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
-      Back to Browse
-    </a>
-
-    <!-- Hero Card -->
-    <section class="content-card mentor-profile-hero">
-      <div class="mentor-profile-avatar">
-        {% if tutor.profile_picture %}
-          <img src="{{ tutor.profile_picture }}" alt="Avatar" class="avatar-img">
-        {% else %}
-          {{ tutor.display_name[:2] | upper }}
-        {% endif %}
-      </div>
-
-      <div class="mentor-profile-heading">
-        <div class="profile-hero-roles">
-          {% for role in tutor.roles %}
-            {% if role != 'student' %}
-              <span class="role-pill {{ 'gaming' if role == 'coach' else 'academic' }}">
-                {{ "Academic Teacher" if role == "mentor" else "Gaming Coach" }}
-              </span>
-            {% endif %}
-          {% endfor %}
-          <span class="badge-verified">Verified Naga City Educator</span>
+  <main class="tprofile-page" data-profile-url="{{ request.url }}">
+    <div class="tprofile-crumbs"><a href="{{ url_for('main.dashboard', view='browse') }}">← Back to educators</a><span>/</span><span>{{ tutor.display_name }}</span><button id="shareProfile" type="button">↗ Share profile</button></div>
+    <section class="tprofile-hero">
+      <div class="tprofile-cover"><span class="cover-glow"></span><span class="cover-tag"><i></i> Learn2Play educator</span></div>
+      <div class="tprofile-identity">
+        <div class="tprofile-avatar">{% if tutor.profile_picture %}<img src="{{ tutor.profile_picture }}" alt="{{ tutor.display_name }}">{% else %}{{ tutor.display_name[:2]|upper }}{% endif %}</div>
+        <div class="tprofile-name"><div class="role-pills">{% if is_mentor %}<span class="role-pill academic">Academic tutor</span>{% endif %}{% if is_coach %}<span class="role-pill gaming">Gaming coach</span>{% endif %}</div><h1>{{ tutor.display_name }}</h1><p>{{ role_label }}</p><div class="tprofile-meta"><span>◷&nbsp; Online sessions</span><span>⌖&nbsp; Philippine Time (UTC+8)</span></div></div>
+        <div class="tprofile-hero-actions"><div><small>STARTING RATE</small><strong>{% if is_mentor and tutor.teaching_rate is not none %}₱{{ '%.2f'|format(tutor.teaching_rate) }}{% elif is_coach and tutor.coaching_rate is not none %}₱{{ '%.2f'|format(tutor.coaching_rate) }}{% elif tutor.hourly_rate is not none %}₱{{ '%.2f'|format(tutor.hourly_rate) }}{% else %}Rate not set{% endif %}</strong><small>per 60-minute session</small></div>
+          {% if 'student' in current_user.roles and current_user.id != tutor.id %}<a class="tprofile-primary" href="{{ url_for('main.book_tutor', user_id=tutor.id) }}">▣&nbsp; Book a session</a>{% endif %}
+          <a class="tprofile-secondary" href="{{ url_for('main.messages_page') }}">Send a message</a>
         </div>
-
-        <h1>{{ tutor.display_name }}</h1>
-        <p>{{ role_label }}</p>
-
-        <div class="mentor-profile-rating">
-          <span>No learner reviews yet</span>
-        </div>
-      </div>
-
-      <!-- Pricing / Rates Box -->
-      <div class="mentor-profile-booking">
-        <span>Starting Rate</span>
-        <strong>
-          {% if is_mentor and tutor.teaching_rate is not none %}
-            ₱{{ "%.2f"|format(tutor.teaching_rate) }}<small>/hr</small>
-          {% elif is_coach and tutor.coaching_rate is not none %}
-            ₱{{ "%.2f"|format(tutor.coaching_rate) }}<small>/hr</small>
-          {% elif tutor.hourly_rate is not none %}
-            ₱{{ "%.2f"|format(tutor.hourly_rate) }}<small>/hr</small>
-          {% else %}
-            Contact<small> for rate</small>
-          {% endif %}
-        </strong>
-        {% if current_user.is_authenticated and 'student' in current_user.roles and current_user.id != tutor.id %}
-          <button type="button" class="cta-btn" id="openBooking">Book a Session</button>
-        {% elif not current_user.is_authenticated %}
-          <a href="{{ url_for('main.auth_page') }}" class="cta-btn" style="text-decoration:none;text-align:center;">Sign in to Book</a>
-        {% else %}
-          <span class="empty-hint">Booking is available from a student account.</span>
-        {% endif %}
       </div>
     </section>
 
-    <!-- Layout Details -->
-    <div class="mentor-profile-layout">
-      <div class="mentor-profile-main">
-        <!-- Bio Card -->
-        <div class="content-card mentor-profile-card">
-          <h2>About {{ tutor.display_name }}</h2>
-          <p>{{ tutor.bio or "This mentor has not added an introduction yet." }}</p>
-        </div>
-
-        <!-- Specialties / Subjects -->
-        <div class="content-card mentor-profile-card">
-          <h2>Subjects &amp; Specialties</h2>
-          <div class="mentor-specialties">
-            {% if tutor.topics and tutor.topics | length > 0 %}
-              {% for topic in tutor.topics %}
-                <span>{{ topic }}</span>
-              {% endfor %}
-            {% else %}
-              <p class="empty-hint">This mentor has not listed subjects or specialties yet.</p>
-            {% endif %}
-          </div>
-        </div>
+    <div class="tprofile-grid">
+      <div class="tprofile-content">
+        <section class="tprofile-card">
+          <div class="tprofile-section-heading"><span class="tprofile-icon">✦</span><div><h2>About {{ tutor.display_name }}</h2><p>Teaching approach and introduction</p></div></div>
+          <p class="tprofile-bio">{{ tutor.bio or 'This educator has not added an introduction yet.' }}</p>
+        </section>
+        <section class="tprofile-card">
+          <div class="tprofile-section-heading"><span class="tprofile-icon mint">⌘</span><div><h2>Teaching &amp; coaching specialties</h2><p>Topics this educator can help with</p></div></div>
+          {% if tutor.topics %}<div class="tprofile-topics">{% for topic in tutor.topics %}<span>{{ topic }}</span>{% endfor %}</div>{% else %}<p class="tprofile-empty">No specialties have been listed yet.</p>{% endif %}
+        </section>
+        <section class="tprofile-card tprofile-delivery">
+          <div class="tprofile-section-heading"><span class="tprofile-icon cyan">◎</span><div><h2>Session format</h2><p>How Learn2Play sessions are held</p></div></div>
+          <div class="delivery-tile"><span class="delivery-symbol">▣</span><div><strong>Online session room</strong><p>After your booking request is accepted, join the session from My Sessions.</p></div><span class="delivery-status">Available</span></div>
+        </section>
+        <section class="tprofile-card tprofile-reviews">
+          <div class="tprofile-section-heading"><span class="tprofile-icon gold">☆</span><div><h2>Learner reviews</h2><p>Feedback from completed sessions</p></div></div>
+          <div class="tprofile-empty-review"><span>☆</span><strong>No learner reviews yet</strong><p>Reviews will appear here when the platform supports feedback for completed sessions.</p></div>
+        </section>
       </div>
 
-      <!-- Sidebar Overview -->
-      <div class="mentor-profile-sidebar">
-        <div class="content-card mentor-profile-card">
-          <h2>Hourly Rates Breakdown</h2>
-          {% if is_mentor %}
-          <div class="mentor-detail-row">
-            <span>Academic Tutoring</span>
-            <strong>{{ "₱%.2f/hr"|format(tutor.teaching_rate) if tutor.teaching_rate is not none else "Rate not set" }}</strong>
-          </div>
-          {% endif %}
-
-          {% if is_coach %}
-          <div class="mentor-detail-row">
-            <span>Esports Coaching</span>
-            <strong>{{ "₱%.2f/hr"|format(tutor.coaching_rate) if tutor.coaching_rate is not none else "Rate not set" }}</strong>
-          </div>
-          {% endif %}
-
-        </div>
-        <div class="content-card mentor-profile-card">
-          <h2>Weekly availability</h2>
+      <aside class="tprofile-sidebar">
+        <section class="tprofile-card">
+          <div class="tprofile-section-heading"><span class="tprofile-icon">₱</span><div><h2>Hourly rates</h2><p>Rate for a 60-minute session</p></div></div>
+          {% if is_mentor %}<div class="rate-row"><span><i class="academic-dot"></i>Academic tutoring</span><strong>{% if tutor.teaching_rate is not none %}₱{{ '%.2f'|format(tutor.teaching_rate) }}{% elif tutor.hourly_rate is not none %}₱{{ '%.2f'|format(tutor.hourly_rate) }}{% else %}Not set{% endif %}</strong></div>{% endif %}
+          {% if is_coach %}<div class="rate-row"><span><i class="gaming-dot"></i>Gaming coaching</span><strong>{% if tutor.coaching_rate is not none %}₱{{ '%.2f'|format(tutor.coaching_rate) }}{% elif tutor.hourly_rate is not none %}₱{{ '%.2f'|format(tutor.hourly_rate) }}{% else %}Not set{% endif %}</strong></div>{% endif %}
+          <p class="tprofile-rate-note">The educator confirms your booking request before a session is scheduled.</p>
+        </section>
+        <section class="tprofile-card">
+          <div class="tprofile-section-heading"><span class="tprofile-icon mint">▦</span><div><h2>Weekly availability</h2><p>Times shown in PHT (UTC+8)</p></div></div>
           {% set day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] %}
-          {% if availability %}
-            {% for window in availability %}
-            <div class="mentor-detail-row"><span>{{ day_names[window.weekday] }}</span><strong>{{ window.start_time }}–{{ window.end_time }}</strong></div>
-            {% endfor %}
-          {% else %}
-            <p class="empty-hint">This mentor has not added available times yet.</p>
-          {% endif %}
-          <p class="empty-hint">Times shown in Philippine Time (UTC+8).</p>
-        </div>
-      </div>
+          {% if availability %}{% for window in availability %}<div class="availability-row"><span><b>{{ day_names[window.weekday][:3] }}</b><strong>{{ day_names[window.weekday] }}</strong></span><small>{{ window.start_time }} – {{ window.end_time }}</small></div>{% endfor %}{% else %}<p class="tprofile-empty">No weekly availability has been added yet. Check the booking calendar for open times.</p>{% endif %}
+          {% if 'student' in current_user.roles and current_user.id != tutor.id %}<a class="tprofile-outline-button" href="{{ url_for('main.book_tutor', user_id=tutor.id) }}">View available times&nbsp; →</a>{% endif %}
+        </section>
+        <section class="tprofile-safety"><span>✓</span><div><strong>Booking through Learn2Play</strong><p>Your request is sent to the educator for approval. You can review or cancel it in My Sessions.</p><a href="{{ url_for('main.sessions') }}">Manage my sessions →</a></div></section>
+      </aside>
     </div>
+    <p class="tprofile-feedback" id="shareFeedback" role="status" aria-live="polite"></p>
   </main>
-
-  {% if current_user.is_authenticated and 'student' in current_user.roles and current_user.id != tutor.id %}
-  <div class="booking-overlay" id="bookingOverlay" hidden>
-    <section class="booking-modal content-card" role="dialog" aria-modal="true" aria-labelledby="bookingTitle">
-      <button type="button" class="booking-close" id="closeBooking" aria-label="Close">×</button>
-      <h2 id="bookingTitle">Book {{ tutor.display_name }}</h2>
-      <p class="booking-help">Select an available session time. Times use Philippine Time (UTC+8).</p>
-      <label>Date <input type="date" id="bookingDate" required></label>
-      <label>Available time <select id="bookingTime" required><option value="">Choose a date first</option></select></label>
-      <label>Subject or topic <input id="bookingTopic" maxlength="120" value="{{ tutor.topics[0] if tutor.topics else '' }}" placeholder="e.g. Algebra" required></label>
-      <label>Message (optional) <textarea id="bookingMessage" maxlength="1000" rows="3" placeholder="What would you like to work on?"></textarea></label>
-      <p class="booking-feedback" id="bookingFeedback" role="status"></p>
-      <button type="button" class="cta-btn" id="submitBooking">Send booking request</button>
-    </section>
-  </div>
-  {% endif %}
-
-  {% if current_user.is_authenticated and 'student' in current_user.roles and current_user.id != tutor.id %}
-  <script>window.L2TutorId = {{ tutor.id }};</script>
-  {% endif %}
-  <script src="{{ url_for('static', filename='js/booking.js') }}" defer></script>
-
+  <script src="{{ url_for('static', filename='js/tutor-profile.js') }}" defer></script>
 </body>
 </html>

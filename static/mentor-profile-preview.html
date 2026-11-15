@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mentor Profile Preview | Learn2Play</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/mentor-profile.css">
+  <style>.preview-ribbon{position:relative;z-index:60;padding:8px 14px;background:#292b58;color:#e3e3ff;text-align:center;font:600 10px 'DM Sans',sans-serif}.preview-ribbon a{margin-left:10px;color:#b9baff;text-decoration:underline}.preview-only{color:#b9baff!important}.mentor-profile-management .topbar{position:sticky}</style>
+</head>
+<body class="dashboard mentor-profile-management">
+  <div class="preview-ribbon">STATIC PREVIEW · Sample profile only · Save and upload controls are inactive <a href="/">Back to Learn2Play</a></div>
+  <header class="topbar">
+    <a class="tb-brand" href="#"><div class="logo">L2</div><span class="brand-name">Learn2Play</span></a>
+    <nav class="tb-nav" aria-label="Educator navigation"><a href="#">Overview</a><a href="#">Requests</a><a href="#">Upcoming Sessions</a><a href="#">Availability</a><a class="active" href="#">Provider Profile</a></nav>
+    <div class="tb-right"><span class="mentor-public-email">Educator preview</span></div>
+  </header>
+  <main class="mentor-profile-shell">
+    <div class="mentor-profile-topline"><a class="mentor-back" href="#">← Back to dashboard</a><div class="mentor-profile-actions"><a class="mentor-preview-btn" href="#preview-card">◉ Preview public card</a><button class="mentor-save-top preview-only" type="button">✓ Save profile updates</button></div></div>
+    <header class="mentor-profile-heading"><div><span class="mentor-eyebrow">EDUCATOR WORKSPACE · PROFILE</span><h1>Manage your educator profile</h1><p>Update the details learners see when they browse educators.</p></div><div class="mentor-live-status"><i></i><span>Profile active</span></div></header>
+    <div class="mentor-profile-workspace">
+      <div class="mentor-profile-main">
+        <section class="mentor-preview-panel" id="preview-card">
+          <div class="mentor-panel-heading"><div><span class="mentor-panel-icon">▣</span><div><h2>Public profile preview</h2><p>This is how learners see your educator card.</p></div></div><a href="#">Open full page ↗</a></div>
+          <div class="mentor-public-card">
+            <div class="mentor-public-avatar">AM</div>
+            <div class="mentor-public-copy"><div class="mentor-role-pills"><span class="role-pill academic">Academic tutor</span><span class="role-pill gaming">Gaming coach</span></div><h2>Alex Morgan</h2><p>I help learners build confidence in mathematics and improve their competitive game sense through calm, structured practice.</p><span class="mentor-public-email">alex.morgan@example.test</span></div>
+            <div class="mentor-public-rate"><small>STARTING RATE</small><strong>₱350.00</strong><span>per hour</span></div>
+            <div class="mentor-public-topics"><span class="topic-pill user-topic">Algebra</span><span class="topic-pill user-topic">Physics</span><span class="topic-pill user-topic">Valorant strategy</span></div>
+          </div>
+        </section>
+        <section class="mentor-edit-panel">
+          <div class="mentor-panel-heading"><div><span class="mentor-panel-icon purple">✎</span><div><h2>Profile details</h2><p>Sample editable fields shown for layout preview.</p></div></div><button class="mentor-edit-toggle" type="button">Edit details</button></div>
+          <div class="mentor-profile-form">
+            <div class="mentor-photo-row"><div class="mentor-edit-avatar">AM</div><div><strong>Profile photo</strong><p>Use a clear photo learners will recognize.</p></div><button type="button" class="mentor-photo-button preview-only">Change photo</button></div>
+            <div class="mentor-form-grid"><label class="mentor-field"><span>Display name</span><input value="Alex Morgan" readonly></label><label class="mentor-field"><span>Academic teaching rate (₱/hour)</span><input value="350.00" readonly></label><label class="mentor-field"><span>Gaming coaching rate (₱/hour)</span><input value="400.00" readonly></label></div>
+            <label class="mentor-field"><span>Subjects &amp; specialties</span><input value="Algebra, Physics, Valorant strategy" readonly></label>
+            <label class="mentor-field"><span>About you and your teaching approach</span><textarea rows="4" readonly>I help learners build confidence in mathematics and improve their competitive game sense through calm, structured practice.</textarea><small>Sample profile text</small></label>
+            <div class="mentor-form-bottom"><p class="preview-only">Preview only. Your real profile data appears after sign-in.</p><div><button class="mentor-cancel-btn" type="button">Cancel</button><button class="mentor-save-button preview-only" type="button">Save changes</button></div></div>
+          </div>
+        </section>
+        <section class="mentor-edit-panel"><div class="mentor-panel-heading"><div><span class="mentor-panel-icon mint">▦</span><div><h2>Subjects &amp; specialties</h2><p>Public tags help learners find the right educator.</p></div></div><span class="mentor-tag-count">3 tags</span></div><div class="mentor-tags"><span class="mentor-tag">Algebra</span><span class="mentor-tag">Physics</span><span class="mentor-tag">Valorant strategy</span></div></section>
+      </div>
+      <aside class="mentor-profile-side">
+        <section class="mentor-side-panel"><div class="mentor-panel-heading"><div><span class="mentor-panel-icon mint">◎</span><div><h2>Active educator roles</h2><p>Roles approved for this account</p></div></div></div><div class="mentor-active-role"><span>▤</span><div><strong>Academic tutor</strong><small>Active on Learn2Play</small></div><i>Active</i></div><div class="mentor-active-role"><span class="coach">⌘</span><div><strong>Gaming coach</strong><small>Active on Learn2Play</small></div><i>Active</i></div><p class="mentor-role-help">Role changes are managed in Account Settings.</p></section>
+        <section class="mentor-side-panel"><div class="mentor-panel-heading"><div><span class="mentor-panel-icon purple">₱</span><div><h2>Your hourly rates</h2><p>For 60-minute sessions</p></div></div></div><div class="mentor-rate-row"><span>Academic tutoring</span><strong>₱350.00 / hr</strong></div><div class="mentor-rate-row"><span>Gaming coaching</span><strong>₱400.00 / hr</strong></div><button type="button" class="mentor-outline-button">Edit rates</button></section>
+        <section class="mentor-side-panel"><div class="mentor-panel-heading"><div><span class="mentor-panel-icon cyan">◷</span><div><h2>Weekly availability</h2><p>Times shown in Philippine Time</p></div></div><a class="mentor-manage-link" href="#">Manage ↗</a></div><div class="mentor-availability-row"><span><b>TUE</b>Tuesday</span><small>13:00–17:00</small></div><div class="mentor-availability-row"><span><b>THU</b>Thursday</span><small>15:00–19:00</small></div><div class="mentor-availability-row"><span><b>SAT</b>Saturday</span><small>10:00–14:00</small></div></section>
+        <section class="mentor-side-panel"><div class="mentor-panel-heading"><div><span class="mentor-panel-icon gold">✓</span><div><h2>Credentials on file</h2><p>Sample display</p></div></div></div><div class="mentor-credential-row"><span>▤</span><div><strong>Teaching_Certificate.pdf</strong><small>Uploaded Jan 12, 2026</small></div></div><div class="mentor-credential-row"><span>▤</span><div><strong>Coach_Profile.pdf</strong><small>Uploaded Jan 12, 2026</small></div></div></section>
+        <section class="mentor-metrics"><span class="mentor-eyebrow">YOUR ACTIVITY · SAMPLE</span><div><strong>12</strong><span>Completed sessions</span></div><div><strong>18</strong><span>Learning hours completed</span></div></section>
+      </aside>
+    </div>
+  </main>
+</body>
+</html>

@@ -1158,6 +1158,12 @@ def create_booking():
         return error("Choose an available date and time.")
     if not mentor or not mentor.is_active or not any(r in mentor.roles for r in ("mentor", "coach")):
         return error("Mentor not found.", 404)
+    requested_role = data.get("role")
+    if requested_role is not None and requested_role not in ("mentor", "coach"):
+        return error("Choose a valid session track.")
+    role = requested_role or ("mentor" if "mentor" in mentor.roles else "coach")
+    if role not in mentor.roles:
+        return error("This educator does not offer that session track.", 400)
     if not topic:
         return error("Enter a subject or session topic.", field="topic")
     if slot.minute or slot.second or slot.microsecond:
@@ -1178,7 +1184,6 @@ def create_booking():
         a.start_time + timedelta(minutes=a.duration_minutes or 60) > start_utc for a in booked)
     if clash:
         return error("That time was just booked. Please choose another slot.", 409)
-    role = "mentor" if "mentor" in mentor.roles else "coach"
     rate = mentor.teaching_rate if role == "mentor" else mentor.coaching_rate
     if rate is None:
         rate = mentor.hourly_rate
@@ -1303,7 +1308,7 @@ def dashboard():
         pending_provider_roles = [a.role for a in apps]
 
     return render_template(
-        "dashboard.html",
+        "shared/dashboard.html",
         next_session=next_session,
         prev_session=prev_session,
         format_dt_pht=format_dt_pht,
@@ -1343,7 +1348,7 @@ def schedule():
     )
 
     return render_template(
-        "schedule.html",
+        "mentor/schedule.html",
         upcoming=upcoming,
         past=past,
         cancelled=cancelled,
@@ -1379,22 +1384,48 @@ def view_tutor_profile(user_id):
         ).all(),
     )
 
+
+@main.route("/tutors/<int:user_id>/book")
+@login_required
+def book_tutor(user_id):
+    tutor = db.session.get(User, user_id)
+    if not tutor or not tutor.is_active or not any(r in tutor.roles for r in ("mentor", "coach")):
+        abort(404)
+    if "student" not in current_user.roles or current_user.is_admin or current_user.id == tutor.id:
+        return redirect(url_for("main.view_tutor_profile", user_id=user_id))
+    return render_template(
+        "student/book-session.html",
+        tutor=tutor,
+        is_mentor="mentor" in tutor.roles,
+        is_coach="coach" in tutor.roles,
+    )
+
 @main.route("/profile")
 @login_required
 def profile():
-    return render_template("profile.html")
+    if any(role in current_user.roles for role in ("mentor", "coach")):
+        return render_template(
+            "mentor/profile.html",
+            availability=MentorAvailability.query.filter_by(mentor_id=current_user.id).order_by(
+                MentorAvailability.weekday, MentorAvailability.start_time
+            ).all(),
+            credentials=Credential.query.filter_by(user_id=current_user.id).order_by(
+                Credential.created_at.desc()
+            ).all(),
+        )
+    return render_template("shared/profile.html")
 
 
 @main.route("/sessions")
 @login_required
 def sessions():
-    return render_template("sessions.html")
+    return render_template("shared/sessions.html")
 
 
 @main.route("/settings")
 @login_required
 def settings():
-    return render_template("settings.html")
+    return render_template("shared/settings.html")
 
 
 @main.route("/help")
@@ -1869,7 +1900,7 @@ def admin_settings():
 @main.route("/messages")
 @login_required
 def messages_page():
-    return render_template("messages.html")
+    return render_template("shared/messages.html")
 
 # Peer user search — returns students the current user can start a P2P chat with
 @main.route("/api/messages/peer-users", methods=["GET"])

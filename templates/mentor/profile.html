@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <title>{{ current_user.display_name }} | Educator Profile</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/mentor-profile.css') }}">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+</head>
+<body class="dashboard mentor-profile-management">
+  {% set active_page = 'profile' %}{% include '_navbar.html' %}
+  <main class="mentor-profile-shell">
+    <div class="mentor-profile-topline"><a class="mentor-back" href="{{ url_for('main.dashboard') }}">← Back to dashboard</a><div class="mentor-profile-actions"><a class="mentor-preview-btn" href="{{ url_for('main.view_tutor_profile', user_id=current_user.id) }}" target="_blank" rel="noopener">◉ Preview public profile</a><button class="mentor-save-top" id="topSaveProfile" type="button">✓ Save profile updates</button></div></div>
+    <header class="mentor-profile-heading"><div><span class="mentor-eyebrow">EDUCATOR WORKSPACE · PROFILE</span><h1>Manage your educator profile</h1><p>Update the details learners see when they browse educators.</p></div><div class="mentor-live-status"><i></i><span>Profile active</span></div></header>
+    <div class="mentor-profile-workspace">
+      <div class="mentor-profile-main">
+        <section class="mentor-preview-panel">
+          <div class="mentor-panel-heading"><div><span class="mentor-panel-icon">▣</span><div><h2>Public profile preview</h2><p>This is how learners see your educator card.</p></div></div><a href="{{ url_for('main.view_tutor_profile', user_id=current_user.id) }}" target="_blank" rel="noopener">Open full page ↗</a></div>
+          <div class="mentor-public-card">
+            <div class="mentor-public-avatar" id="profileAvatar">{% if current_user.profile_picture %}<img src="{{ current_user.profile_picture }}" alt="Profile photo" id="avatarImg">{% else %}<span id="avatarInitials">{{ current_user.display_name[:2]|upper if current_user.display_name else 'U' }}</span>{% endif %}</div>
+            <div class="mentor-public-copy"><div class="mentor-role-pills">{% for role in current_user.roles %}{% if role in ['mentor','coach'] %}<span class="role-pill {{ 'gaming' if role == 'coach' else 'academic' }}">{{ 'Gaming coach' if role == 'coach' else 'Academic tutor' }}</span>{% endif %}{% endfor %}</div><h2 id="profileName">{{ current_user.display_name }}</h2><p id="profileBio">{{ current_user.bio or 'Add a short introduction so learners can get to know your teaching style.' }}</p><span class="mentor-public-email" id="profileEmail">{{ current_user.email }}</span></div>
+            <div class="mentor-public-rate"><small>STARTING RATE</small><strong id="profileStartingRate">{% if 'mentor' in current_user.roles and current_user.teaching_rate is not none %}₱{{ '%.2f'|format(current_user.teaching_rate) }}{% elif 'coach' in current_user.roles and current_user.coaching_rate is not none %}₱{{ '%.2f'|format(current_user.coaching_rate) }}{% elif current_user.hourly_rate is not none %}₱{{ '%.2f'|format(current_user.hourly_rate) }}{% else %}Not set{% endif %}</strong><span>per hour</span></div>
+            <div class="mentor-public-topics" id="profileTopicsList">{% if current_user.topics %}{% for topic in current_user.topics %}<span class="topic-pill user-topic">{{ topic }}</span>{% endfor %}{% else %}<span class="mentor-no-topics">No specialties added</span>{% endif %}</div>
+          </div>
+        </section>
+
+        <section class="mentor-edit-panel">
+          <div class="mentor-panel-heading"><div><span class="mentor-panel-icon purple">✎</span><div><h2>Profile details</h2><p>Changes save to your Learn2Play educator profile.</p></div></div><button id="editProfileBtn" type="button" class="mentor-edit-toggle">Edit details</button></div>
+          <form id="profileEditForm" class="mentor-profile-form hidden" novalidate>
+          <div class="mentor-photo-row"><div class="mentor-edit-avatar" id="editAvatarPreview">{% if current_user.profile_picture %}<img src="{{ current_user.profile_picture }}" alt="">{% else %}{{ current_user.display_name[:2]|upper if current_user.display_name else 'U' }}{% endif %}</div><div><strong>Profile photo</strong><p>Use a clear photo learners will recognize.</p></div><button type="button" class="mentor-photo-button" id="avatarDropzone">Change photo<input class="sr-only" type="file" id="avatarFileInput" accept="image/png,image/jpeg,image/webp"></button></div>
+            <div class="mentor-form-grid"><label class="mentor-field"><span>Display name</span><input id="editName" name="name" type="text" minlength="2" maxlength="80" value="{{ current_user.display_name }}" required></label>
+              {% if 'mentor' in current_user.roles %}<label class="mentor-field"><span>Academic teaching rate (₱/hour)</span><input id="editTeachingRate" name="teaching_rate" type="number" min="0" max="50000" step="0.01" value="{{ current_user.teaching_rate if current_user.teaching_rate is not none else '' }}" placeholder="Not set"></label>{% endif %}
+              {% if 'coach' in current_user.roles %}<label class="mentor-field"><span>Gaming coaching rate (₱/hour)</span><input id="editCoachingRate" name="coaching_rate" type="number" min="0" max="50000" step="0.01" value="{{ current_user.coaching_rate if current_user.coaching_rate is not none else '' }}" placeholder="Not set"></label>{% endif %}
+            </div>
+            <label class="mentor-field"><span>Subjects &amp; specialties</span><input id="editTopics" name="topics" type="text" value="{{ current_user.topics|join(', ') if current_user.topics else '' }}" placeholder="Separate topics with commas"><small>Add subjects, games, or coaching specialties.</small></label>
+            <label class="mentor-field"><span>About you and your teaching approach</span><textarea id="editBio" name="bio" maxlength="500" rows="5" placeholder="Tell learners how you can help…">{{ current_user.bio or '' }}</textarea><small><span id="bioCount">{{ (current_user.bio or '')|length }}</span> / 500 characters</small></label>
+            <div class="mentor-form-bottom"><p id="profileFormMessage" role="status" aria-live="polite"></p><div><button class="mentor-cancel-btn" id="cancelEditBtn" type="button">Cancel</button><button class="mentor-save-button" id="saveProfileBtn" type="submit">Save changes</button></div></div>
+          </form>
+        </section>
+
+        <section class="mentor-edit-panel"><div class="mentor-panel-heading"><div><span class="mentor-panel-icon mint">▦</span><div><h2>Subjects &amp; specialties</h2><p>Your public tags help learners find the right educator.</p></div></div><span class="mentor-tag-count">{{ current_user.topics|length }} tags</span></div><div class="mentor-tags" id="mentorTopicsDisplay">{% if current_user.topics %}{% for topic in current_user.topics %}<span>{{ topic }}</span>{% endfor %}{% else %}<p>No specialties yet. Add them in Profile details.</p>{% endif %}</div></section>
+      </div>
+
+      <aside class="mentor-profile-side">
+        <section class="mentor-side-panel"><div class="mentor-panel-heading"><div><span class="mentor-panel-icon mint">◎</span><div><h2>Active educator roles</h2><p>Roles approved for your account</p></div></div></div>
+          {% for role in current_user.roles %}{% if role in ['mentor','coach'] %}<div class="mentor-active-role"><span class="{{ 'coach' if role == 'coach' else '' }}">{{ '⌘' if role == 'coach' else '▤' }}</span><div><strong>{{ 'Gaming coach' if role == 'coach' else 'Academic tutor' }}</strong><small>Active on Learn2Play</small></div><i>Active</i></div>{% endif %}{% endfor %}
+          <p class="mentor-role-help">To request another educator role, visit <a href="{{ url_for('main.settings') }}">Account Settings</a>.</p>
+        </section>
+        <section class="mentor-side-panel"><div class="mentor-panel-heading"><div><span class="mentor-panel-icon purple">₱</span><div><h2>Your hourly rates</h2><p>For 60-minute sessions</p></div></div></div>
+          {% if 'mentor' in current_user.roles %}<div class="mentor-rate-row"><span>Academic tutoring</span><strong id="profileTeachingRate">{% if current_user.teaching_rate is not none %}₱{{ '%.2f'|format(current_user.teaching_rate) }} / hr{% else %}Not set{% endif %}</strong></div>{% endif %}
+          {% if 'coach' in current_user.roles %}<div class="mentor-rate-row"><span>Gaming coaching</span><strong id="profileCoachingRate">{% if current_user.coaching_rate is not none %}₱{{ '%.2f'|format(current_user.coaching_rate) }} / hr{% else %}Not set{% endif %}</strong></div>{% endif %}
+          <button type="button" class="mentor-outline-button" id="editRatesButton">Edit rates</button>
+        </section>
+        <section class="mentor-side-panel"><div class="mentor-panel-heading"><div><span class="mentor-panel-icon cyan">◷</span><div><h2>Weekly availability</h2><p>Times shown in Philippine Time</p></div></div><a class="mentor-manage-link" href="{{ url_for('main.schedule') }}">Manage ↗</a></div>
+          {% set day_names = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'] %}
+          {% if availability %}{% for window in availability %}<div class="mentor-availability-row"><span><b>{{ day_names[window.weekday][:3] }}</b>{{ day_names[window.weekday] }}</span><small>{{ window.start_time }}–{{ window.end_time }}</small></div>{% endfor %}{% else %}<p class="mentor-empty">No availability saved. Add your weekly hours to receive booking requests.</p>{% endif %}
+        </section>
+        <section class="mentor-side-panel"><div class="mentor-panel-heading"><div><span class="mentor-panel-icon gold">✓</span><div><h2>Credentials on file</h2><p>Uploaded during educator application</p></div></div></div>
+          {% if credentials %}{% for credential in credentials %}<div class="mentor-credential-row"><span>▤</span><div><strong>{{ credential.original_name }}</strong><small>Uploaded {{ credential.created_at.strftime('%b %d, %Y') }}</small></div></div>{% endfor %}{% else %}<p class="mentor-empty">No credential files are attached to this account.</p>{% endif %}
+        </section>
+        <section class="mentor-metrics"><span class="mentor-eyebrow">YOUR ACTIVITY</span><div><strong id="statSessions">0</strong><span>Completed sessions</span></div><div><strong id="statHours">0</strong><span>Learning hours completed</span></div></section>
+      </aside>
+    </div>
+  </main>
+
+  <div class="crop-modal-backdrop hidden" id="cropModal"><section class="crop-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="cropTitle"><header class="crop-modal-header"><h2 id="cropTitle">Adjust profile photo</h2><button id="closeCropBtn" type="button" aria-label="Close">×</button></header><div class="cropper-container"><img id="cropperImageSrc" alt="Image crop preview"></div><div class="crop-controls"><button id="zoomOutBtn" type="button">−</button><button id="zoomInBtn" type="button">+</button><button id="rotateLeftBtn" type="button">Rotate</button></div><footer><button id="cancelCropBtn" type="button">Cancel</button><button id="saveCropBtn" type="button">Apply &amp; save photo</button></footer></section></div>
+
+  <script src="{{ url_for('static', filename='js/modes.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/profile.js') }}" defer></script>
+  <script>
+    document.getElementById('topSaveProfile')?.addEventListener('click', () => document.getElementById('profileEditForm')?.requestSubmit());
+    document.getElementById('editRatesButton')?.addEventListener('click', () => { document.getElementById('profileEditForm')?.classList.remove('hidden'); document.getElementById('profileEditForm')?.scrollIntoView({behavior:'smooth',block:'center'}); (document.getElementById('editTeachingRate') || document.getElementById('editCoachingRate'))?.focus(); });
+  </script>
+</body>
+</html>
