@@ -4,6 +4,7 @@ import secrets
 import urllib.parse
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation
 from functools import wraps
 from io import BytesIO
@@ -29,17 +30,35 @@ from flask_login import (
 from flask_wtf.csrf import generate_csrf
 import jwt
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 from supabase import create_client
 from werkzeug.utils import secure_filename
 
 if __package__:
     from .extensions import db
-    from .models import Appointment, Credential, MentorAvailability, MentorUnavailableDate, Message, Report, RoleApplication, User, utcnow
+    from .models import Appointment, Credential, MentorAvailability, MentorUnavailableDate, Message, Report, RoleApplication, User, XpEvent, utcnow
 else:
     from extensions import db
-    from models import Appointment, Credential, MentorAvailability, MentorUnavailableDate, Message, Report, RoleApplication, User, utcnow
+    from models import Appointment, Credential, MentorAvailability, MentorUnavailableDate, Message, Report, RoleApplication, User, XpEvent, utcnow
 
 main = Blueprint("main", __name__)
+
+
+def _balance_streak_from_events(events, current_week_start, tz):
+    """Return the consecutive balanced-week streak, preserving it during this week."""
+    paths_by_week = {}
+    for event in events:
+        event_day = event.created_at.replace(tzinfo=timezone.utc).astimezone(tz).date()
+        monday = event_day - timedelta(days=event_day.weekday())
+        paths_by_week.setdefault(monday, set()).add(event.path)
+    balanced_weeks = {week for week, paths in paths_by_week.items() if {"academic", "gaming"} <= paths}
+    current_week_complete = current_week_start in balanced_weeks
+    cursor = current_week_start if current_week_complete else current_week_start - timedelta(days=7)
+    streak = 0
+    while cursor in balanced_weeks:
+        streak += 1
+        cursor -= timedelta(days=7)
+    return streak, current_week_complete
 
 # ---------- Application Configuration & Central Currency ----------
 ALLOWED_ROLES = {"student", "mentor", "coach"}   # "mentor" is displayed to users as "Teacher"
@@ -1206,6 +1225,10 @@ def list_my_bookings():
         "student": a.student.display_name if a.student else "Student",
         "mentor": a.provider.display_name if a.provider else "Mentor",
         "role": a.role, "topic": a.topic, "status": a.status,
+        "provider_confirmed": a.provider_confirmed_at is not None,
+        "student_confirmed": a.student_confirmed_at is not None,
+        "attendance_disputed": a.attendance_disputed_at is not None,
+        "xp_awarded": XpEvent.query.filter_by(appointment_id=a.id).first() is not None,
         "start_time": a.start_time.replace(tzinfo=timezone.utc).isoformat(),
         "formatted": format_dt_pht(a.start_time), "duration": a.duration_minutes,
         "price": float(a.price) if a.price is not None else None, "notes": a.notes or "",
@@ -1231,16 +1254,161 @@ def update_booking(booking_id, action):
         if current_user.id not in (appt.student_id, appt.provider_id) or appt.status not in ("pending", "accepted", "scheduled"):
             return error("You cannot cancel this booking.", 403)
         appt.status = "cancelled"
-    elif action == "complete":
-        if appt.provider_id != current_user.id or appt.status not in ("accepted", "scheduled"):
-            return error("You cannot complete this session.", 403)
+    elif action in ("complete", "confirm-attendance", "dispute-attendance"):
+        is_provider_confirmation = action == "complete" and appt.provider_id == current_user.id
+        is_student_confirmation = action == "confirm-attendance" and appt.student_id == current_user.id
+        is_participant_dispute = action == "dispute-attendance" and current_user.id in (appt.provider_id, appt.student_id)
+        if not (is_provider_confirmation or is_student_confirmation or is_participant_dispute):
+            return error("Only the session participants can confirm attendance.", 403)
+        if appt.status not in ("accepted", "scheduled", "completed"):
+            return error("This session cannot be confirmed.", 403)
         if appt.start_time + timedelta(minutes=appt.duration_minutes or 60) > utcnow():
-            return error("A session can be completed after its scheduled end time.")
-        appt.status = "completed"
+            return error("Attendance can be confirmed after the scheduled session end.")
+        if action == "dispute-attendance":
+            if appt.status == "completed":
+                return error("Completed attendance cannot be disputed through this flow.", 400)
+            if appt.attendance_disputed_at is None:
+                appt.attendance_disputed_at = utcnow()
+                appt.attendance_disputed_by_id = current_user.id
+        elif appt.attendance_disputed_at is not None:
+            return error("Attendance is disputed. Contact support before confirming.", 409)
+        if is_provider_confirmation and appt.provider_confirmed_at is None:
+            appt.provider_confirmed_at = utcnow()
+        if is_student_confirmation and appt.student_confirmed_at is None:
+            appt.student_confirmed_at = utcnow()
+        if appt.provider_confirmed_at and appt.student_confirmed_at and appt.attendance_disputed_at is None and appt.status != "completed":
+            appt.status = "completed"
+            db.session.add(XpEvent(
+                user_id=appt.student_id,
+                appointment_id=appt.id,
+                path="academic" if appt.role == "mentor" else "gaming",
+                points=50,
+            ))
     else:
         return error("Unsupported booking action.")
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        # A concurrent completion request may win the unique XP event race.
+        # Treat the losing request as successful only if the award exists.
+        existing_award = XpEvent.query.filter_by(appointment_id=booking_id).first()
+        if action in ("complete", "confirm-attendance", "dispute-attendance") and existing_award:
+            appt = db.session.get(Appointment, booking_id)
+            return jsonify({"ok": True, "status": appt.status})
+        raise
+    return jsonify({
+        "ok": True,
+        "status": appt.status,
+        "provider_confirmed": appt.provider_confirmed_at is not None,
+        "student_confirmed": appt.student_confirmed_at is not None,
+        "attendance_disputed": appt.attendance_disputed_at is not None,
+    })
+
+
+@main.route("/api/student/progress", methods=["GET"])
+@login_required
+def student_progress():
+    if current_user.is_admin or "student" not in current_user.roles:
+        return error("Only student accounts can view progress.", 403)
+
+    tz = ZoneInfo("Asia/Manila")
+    now = datetime.now(timezone.utc).astimezone(tz)
+    week_start = now.date() - timedelta(days=now.weekday())
+    events = XpEvent.query.filter_by(user_id=current_user.id).order_by(XpEvent.created_at.asc()).all()
+    total = sum(event.points for event in events)
+    academic = sum(event.points for event in events if event.path == "academic")
+    gaming = sum(event.points for event in events if event.path == "gaming")
+    week_events = [event for event in events if event.created_at.replace(tzinfo=timezone.utc).astimezone(tz).date() >= week_start]
+    academic_week = sum(1 for event in week_events if event.path == "academic")
+    gaming_week = sum(1 for event in week_events if event.path == "gaming")
+    week_paths = {event.path for event in week_events}
+    balance_streak, current_week_balanced = _balance_streak_from_events(events, week_start, tz)
+    levels = [(0, "Beginner"), (100, "Learner"), (250, "Competitor"), (500, "Achiever"), (1000, "Elite Student Gamer")]
+    level_index = max(i for i, (threshold, _) in enumerate(levels) if total >= threshold)
+    level_at, level_name = levels[level_index]
+    next_level = levels[level_index + 1] if level_index + 1 < len(levels) else None
+    level_end = next_level[0] if next_level else level_at + 500
+
+    return jsonify({
+        "ok": True,
+        "timezone": "Asia/Manila",
+        "total_xp": total,
+        "academic_xp": academic,
+        "gaming_xp": gaming,
+        "level": level_index + 1,
+        "level_name": level_name,
+        "next_level_xp": next_level[0] if next_level else None,
+        "level_progress": round((total - level_at) / (level_end - level_at) * 100),
+        "quests": {
+            "academic_week": {"count": min(academic_week, 3), "target": 3},
+            "gaming_week": {"count": min(gaming_week, 2), "target": 2},
+            "balanced_week": {"count": len(week_paths), "target": 2},
+            "first_milestone": {"count": min(total, 100), "target": 100},
+        },
+        "badges": {
+            "academic": academic > 0,
+            "gaming": gaming > 0,
+            "combined": academic > 0 and gaming > 0,
+        },
+        "week_start": week_start.isoformat(),
+        "balance_streak_weeks": balance_streak,
+        "current_week_balanced": current_week_balanced,
+        "activity_days": sorted({event.created_at.replace(tzinfo=timezone.utc).astimezone(tz).date().isoformat() for event in week_events}),
+    })
+
+
+@main.route("/api/student/leaderboard-preference", methods=["POST"])
+@login_required
+def update_leaderboard_preference():
+    if current_user.is_admin or "student" not in current_user.roles:
+        return error("Only student accounts can change leaderboard participation.", 403)
+    data = request.get_json(silent=True) or {}
+    opted_in = data.get("opted_in")
+    if not isinstance(opted_in, bool):
+        return error("Choose whether to opt in or out.", field="opted_in")
+    current_user.leaderboard_opt_in = opted_in
     db.session.commit()
-    return jsonify({"ok": True, "status": appt.status})
+    return jsonify({"ok": True, "opted_in": current_user.leaderboard_opt_in})
+
+
+@main.route("/api/leaderboard/weekly", methods=["GET"])
+@login_required
+def weekly_leaderboard_data():
+    if current_user.is_admin or "student" not in current_user.roles:
+        return error("Only student accounts can view the leaderboard.", 403)
+    tz = ZoneInfo("Asia/Manila")
+    now = datetime.now(timezone.utc).astimezone(tz)
+    local_start = datetime.combine(now.date() - timedelta(days=now.weekday()), time.min, tzinfo=tz)
+    local_end = local_start + timedelta(days=7)
+    start_utc = local_start.astimezone(timezone.utc).replace(tzinfo=None)
+    end_utc = local_end.astimezone(timezone.utc).replace(tzinfo=None)
+    rows = (
+        db.session.query(User.id, User.display_name, func.sum(XpEvent.points).label("weekly_xp"))
+        .join(XpEvent, XpEvent.user_id == User.id)
+        .filter(
+            User.is_active.is_(True),
+            User.is_admin.is_(False),
+            User.leaderboard_opt_in.is_(True),
+            XpEvent.created_at >= start_utc,
+            XpEvent.created_at < end_utc,
+        )
+        .group_by(User.id, User.display_name)
+        .order_by(func.sum(XpEvent.points).desc(), User.display_name.asc(), User.id.asc())
+        .limit(50)
+        .all()
+    )
+    return jsonify({
+        "ok": True,
+        "week_start": local_start.date().isoformat(),
+        "week_end": (local_end.date() - timedelta(days=1)).isoformat(),
+        "timezone": "Asia/Manila",
+        "opted_in": current_user.leaderboard_opt_in,
+        "entries": [
+            {"rank": rank, "display_name": name, "weekly_xp": int(points)}
+            for rank, (_, name, points) in enumerate(rows, start=1)
+        ],
+    })
 
 
 @main.route("/api/sessions/<int:booking_id>/join", methods=["GET"])
@@ -1421,6 +1589,14 @@ def profile():
 @login_required
 def sessions():
     return render_template("shared/sessions.html")
+
+
+@main.route("/leaderboard")
+@login_required
+def leaderboard_page():
+    if current_user.is_admin or "student" not in current_user.roles:
+        return error("Only student accounts can view the leaderboard.", 403)
+    return render_template("student/leaderboard.html")
 
 
 @main.route("/settings")

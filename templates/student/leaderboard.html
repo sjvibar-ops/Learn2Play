@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <title>Weekly Leaderboard | Learn2Play</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/leaderboard.css') }}">
+</head>
+<body class="dashboard">
+  {% set active_page = 'leaderboard' %}
+  {% include '_navbar.html' %}
+  <main class="leaderboard-page">
+    <a class="back-dashboard-btn" href="{{ url_for('main.dashboard') }}">&larr; Back to dashboard</a>
+    <header class="leaderboard-heading">
+      <span class="gp-eyebrow">LEARN2PLAY COMMUNITY</span>
+      <h1>Weekly leaderboard</h1>
+      <p>Rankings use XP from sessions both participants confirmed this week in Philippine Time.</p>
+    </header>
+    <section class="leaderboard-opt-in gp-card" aria-labelledby="leaderboardPrivacyHeading">
+      <div class="leaderboard-opt-in-copy">
+        <span class="gp-eyebrow">YOUR VISIBILITY</span>
+        <h2 id="leaderboardPrivacyHeading">Choose whether to participate</h2>
+        <p>Opt in to show your display name and confirmed XP for this week. Your email and account details stay private. You can leave anytime.</p>
+      </div>
+      <div class="leaderboard-opt-in-footer">
+        <p id="leaderboardPreferenceStatus" class="leaderboard-preference-status" role="status" aria-live="polite">Loading preference...</p>
+        <label class="leaderboard-toggle" for="leaderboardOptIn">
+          <input id="leaderboardOptIn" type="checkbox">
+          <span class="leaderboard-switch" aria-hidden="true"></span>
+          <span class="leaderboard-toggle-copy">Join the weekly leaderboard</span>
+        </label>
+      </div>
+    </section>
+    <section class="leaderboard-table-card gp-card" aria-labelledby="leaderboardListHeading">
+      <div class="gp-card-heading"><div><h2 id="leaderboardListHeading">This week</h2><p id="leaderboardWeek" class="gp-caption">Loading week…</p></div><span class="gp-muted">Top 50 participants</span></div>
+      <p id="leaderboardStatus" class="leaderboard-sr-only" role="status" aria-live="polite">Loading rankings...</p>
+      <div id="leaderboardEmpty" class="leaderboard-empty-state" hidden>
+        <span class="leaderboard-empty-mark" aria-hidden="true">&#10022;</span>
+        <h3 id="leaderboardEmptyTitle">No entries yet</h3>
+        <p>The weekly rankings will show students who opt in and earn XP from confirmed sessions.</p>
+      </div>
+      <div id="leaderboardTableWrap" class="leaderboard-table-wrap" hidden><table class="leaderboard-table"><thead><tr><th scope="col">Rank</th><th scope="col">Student</th><th scope="col">XP this week</th></tr></thead><tbody id="leaderboardEntries"></tbody></table></div>
+    </section>
+  </main>
+  <script src="{{ url_for('static', filename='js/modes.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/navbar.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/leaderboard.js') }}" defer></script>
+</body>
+</html>

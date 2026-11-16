@@ -48,6 +48,7 @@ class User(UserMixin, db.Model):
     # Administrative access is separate from user-selected roles
     is_admin = db.Column(db.Boolean, default=False, nullable=False)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
+    leaderboard_opt_in = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
 
     @property
     def roles(self):
@@ -136,6 +137,10 @@ class Appointment(db.Model):
 
     # Status: scheduled | completed | cancelled
     status = db.Column(db.String(20), nullable=False, default="scheduled")
+    provider_confirmed_at = db.Column(db.DateTime, nullable=True)
+    student_confirmed_at = db.Column(db.DateTime, nullable=True)
+    attendance_disputed_at = db.Column(db.DateTime, nullable=True)
+    attendance_disputed_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
 
     # Financial snapshot locked at booking time
     price = db.Column(db.Numeric(10, 2), nullable=True)
@@ -153,9 +158,32 @@ class Appointment(db.Model):
     # Relationships
     provider = db.relationship("User", foreign_keys=[provider_id], backref="provider_appointments")
     student = db.relationship("User", foreign_keys=[student_id], backref="student_appointments")
+    attendance_disputed_by = db.relationship("User", foreign_keys=[attendance_disputed_by_id])
 
     def __repr__(self):
         return f"<Appointment #{self.id} {self.topic} ({self.status})>"
+
+
+class XpEvent(db.Model):
+    """Immutable XP awarded for a server-confirmed appointment."""
+    __tablename__ = "xp_events"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    appointment_id = db.Column(db.Integer, db.ForeignKey("appointments.id"), nullable=False)
+    path = db.Column(db.String(20), nullable=False)  # academic | gaming
+    points = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+    user = db.relationship("User", backref="xp_events")
+    appointment = db.relationship("Appointment")
+
+    __table_args__ = (
+        db.UniqueConstraint("appointment_id", name="uq_xp_events_appointment"),
+        db.CheckConstraint("points > 0", name="ck_xp_events_positive_points"),
+        db.CheckConstraint("path IN ('academic', 'gaming')", name="ck_xp_events_path"),
+        db.Index("ix_xp_events_user_created", "user_id", "created_at"),
+    )
 
 
 class Report(db.Model):

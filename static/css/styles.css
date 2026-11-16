@@ -4768,6 +4768,16 @@ html {
 .gp-week { display: grid; grid-template-columns: repeat(7,1fr); gap: 5px; }
 .gp-week span { display: grid; gap: 7px; padding: 8px 3px; border-radius: 9px; background: #222431; color: var(--txt3); font-size: 10px; text-align: center; }
 .gp-week b { color: var(--txt3); font-size: 11px; }
+.gp-streak-card .gp-streak-count { margin: 22px 0 0; }
+.gp-streak-count > span { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid rgba(251,191,36,.16); border-radius: 14px; background: linear-gradient(145deg,rgba(251,191,36,.15),rgba(251,113,133,.08)); font-size: 25px; }
+.gp-streak-count strong { font-size: 26px; letter-spacing: -.03em; }
+.gp-streak-card .gp-week { grid-template-columns: repeat(7,minmax(0,1fr)); gap: 8px; margin-top: 24px; }
+.gp-streak-card .gp-week span { min-width: 0; min-height: 68px; align-content: center; gap: 9px; border: 1px solid rgba(162,167,187,.08); border-radius: 12px; background: linear-gradient(180deg,rgba(162,167,187,.08),rgba(162,167,187,.035)); color: var(--txt3); font-size: 10px; font-weight: 600; }
+.gp-streak-card .gp-week .one { border-color: rgba(74,222,128,.2); background: linear-gradient(180deg,rgba(74,222,128,.075),rgba(74,222,128,.035)); color: var(--txt2); }
+.gp-streak-card .gp-week .one b { display: grid; width: 24px; height: 24px; place-items: center; justify-self: center; border-radius: 50%; background: rgba(74,222,128,.12); color: var(--green); font-size: 15px; }
+.gp-streak-legend { display: flex; align-items: center; gap: 8px; margin-top: 13px; color: var(--green); font-size: 10px; line-height: 1.45; }
+.gp-streak-legend-mark { display: inline-grid; flex: 0 0 19px; width: 19px; height: 19px; place-items: center; border: 1px solid rgba(74,222,128,.2); border-radius: 7px; background: rgba(74,222,128,.1); color: var(--green); font-size: 12px; font-weight: 700; }
+.gp-streak-card > p.gp-footnote { margin-top: 10px; font-size: 10px; line-height: 1.5; }
 .gp-week .both { background: rgba(74,222,128,.1); color: var(--green); }
 .gp-week .both b { color: var(--green); }
 .gp-week .one { background: rgba(251,191,36,.09); color: var(--gold); }
@@ -4787,6 +4797,9 @@ html {
 .gp-bundle { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
 .gp-coming-soon { display: inline-block; margin-top: 10px; }
 .gp-leaderboard { background: rgba(124,108,245,.06); }
+.gp-leaderboard { display: grid; justify-items: start; gap: 10px; }
+.gp-leaderboard h3, .gp-leaderboard p { margin: 0; }
+.gp-leaderboard .gp-primary-link { display: inline-flex; align-items: center; justify-content: center; margin-top: 2px; }
 .gp-leaderboard > div { display: flex; justify-content: space-between; gap: 8px; margin-top: 12px; color: var(--lavender); font-size: 9px; }
 .gp-leaderboard > div span { color: var(--txt3); }
 .gp-cross-heading { margin-top: 28px; }
@@ -5020,6 +5033,7 @@ body.dashboard[data-dashboard-view="progress"] .sidebar { display: none; }
 .student-session-focus { padding: 12px; border: 1px solid rgba(255,255,255,.035); border-radius: 10px; background: var(--bg); }
 .student-session-focus > span { color: var(--txt3); font-size: 9px; font-weight: 700; letter-spacing: .08em; }
 .student-session-focus p { margin-top: 6px; color: var(--txt2); font-size: 12px; line-height: 1.55; }
+.attendance-confirmation-note { color: var(--txt2); }
 .student-session-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .student-session-actions .session-action { min-width: 120px; padding: 9px 13px; }
 #studentSessionsView .sessions-empty-box[hidden] { display: none; }
