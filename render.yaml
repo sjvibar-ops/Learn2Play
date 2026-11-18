@@ -3,7 +3,7 @@ services:
     name: learn2play
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: gunicorn wsgi:app
     healthCheckPath: /auth
     envVars:
       - key: DATABASE_URL

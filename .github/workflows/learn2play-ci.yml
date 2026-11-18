@@ -1,0 +1,94 @@
+name: LEARN2PLAY CI (test only)
+on:
+  pull_request:
+  push:
+    branches: [main, video-calling]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13']
+    env:
+      DATABASE_URL: "sqlite:///:memory:"
+      DISCORD_SESSIONS_ENABLED: 'false'
+      FLASK_ENV: testing
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Compile Python sources
+        run: python -m compileall -q Backend
+      - name: Run isolated backend unit and integration tests
+        run: python -m unittest discover -s Backend/tests -p 'test_*.py' -v
+      - name: JavaScript syntax check
+        run: node --check Frontend/static/js/sessions.js
+
+  chromium-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: "sqlite:///:memory:"
+      DISCORD_SESSIONS_ENABLED: 'false'
+      FLASK_ENV: testing
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install application and browser dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Run hermetic Chromium session smoke tests
+        run: python qa/fixtures/playwright_chromium_runner.py
+
+  postgres-concurrency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: l2p_test
+          POSTGRES_PASSWORD: disposable_ci_only
+          POSTGRES_DB: l2p_disposable_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U l2p_test -d l2p_disposable_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      L2P_DISPOSABLE_PG_TESTS: 'YES_I_AUTHORIZE_DISPOSABLE_TEST_DB'
+      L2P_DISPOSABLE_PG_URL: postgresql+psycopg://l2p_test:disposable_ci_only@127.0.0.1:5432/l2p_disposable_ci
+      DATABASE_URL: "sqlite:///:memory:"
+      DISCORD_SESSIONS_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run and verify migrations on disposable PostgreSQL
+        run: python qa/verify_postgres_migrations.py
+      - name: Run disposable PostgreSQL CAS tests
+        run: python -m unittest qa.test_disposable_postgres_concurrency -v
+
+# No deploy job, production secrets, persistent migrations or live Discord.

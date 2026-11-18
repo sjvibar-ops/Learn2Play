@@ -13,3 +13,6 @@ instance/credentials/
 .vercel
 .env*
 !.env.example
+*.bat
+roadmap.md
+devlogs.md
