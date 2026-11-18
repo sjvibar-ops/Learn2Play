@@ -1395,18 +1395,27 @@ def weekly_leaderboard_data():
         )
         .group_by(User.id, User.display_name)
         .order_by(func.sum(XpEvent.points).desc(), User.display_name.asc(), User.id.asc())
-        .limit(50)
         .all()
     )
+    ranked_rows = [
+        {"user_id": user_id, "rank": rank, "display_name": name, "weekly_xp": int(points)}
+        for rank, (user_id, name, points) in enumerate(rows, start=1)
+    ]
+    own_row = next((row for row in ranked_rows if row["user_id"] == current_user.id), None)
     return jsonify({
         "ok": True,
         "week_start": local_start.date().isoformat(),
         "week_end": (local_end.date() - timedelta(days=1)).isoformat(),
         "timezone": "Asia/Manila",
         "opted_in": current_user.leaderboard_opt_in,
+        "your_progress": (
+            {"weekly_xp": own_row["weekly_xp"], "rank": own_row["rank"]}
+            if current_user.leaderboard_opt_in and own_row
+            else ({"weekly_xp": 0, "rank": None} if current_user.leaderboard_opt_in else None)
+        ),
         "entries": [
-            {"rank": rank, "display_name": name, "weekly_xp": int(points)}
-            for rank, (_, name, points) in enumerate(rows, start=1)
+            {"rank": row["rank"], "display_name": row["display_name"], "weekly_xp": row["weekly_xp"]}
+            for row in ranked_rows[:50]
         ],
     })
 
