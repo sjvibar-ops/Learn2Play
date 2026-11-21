@@ -214,14 +214,30 @@ class PaymentTests(unittest.TestCase):
         self.assertEqual(self.client.post(url, json=['bad']).status_code, 400)
         self.assertEqual(self.payment.status, 'SUBMITTED')
 
-    def test_commit_failure_compensates_upload(self):
+    def test_precommit_write_failure_compensates_upload(self):
         from sqlalchemy.exc import SQLAlchemyError
-        with patch.object(db.session, 'commit', side_effect=SQLAlchemyError('test')):
+        with patch.object(db.session, 'flush', side_effect=SQLAlchemyError('test')):
             response = self.upload()
         self.assertEqual(response.status_code, 503)
         self.assertEqual(self.payment.status, 'PENDING')
         self.assertIsNone(self.payment.receipt_path)
         self.storage.remove.assert_called_once()
+
+    def test_lost_commit_acknowledgement_preserves_committed_receipt(self):
+        from sqlalchemy.exc import SQLAlchemyError
+        commit = db.session.commit
+
+        def commit_then_lose_acknowledgement():
+            commit()
+            raise SQLAlchemyError("lost commit acknowledgement")
+
+        with patch.object(db.session, "commit", side_effect=commit_then_lose_acknowledgement):
+            response = self.upload()
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(self.payment.status, "SUBMITTED")
+        self.assertTrue(self.payment.receipt_path)
+        self.assertEqual(self.payment.events[-1].receipt_path, self.payment.receipt_path)
+        self.storage.remove.assert_not_called()
 
     def test_public_bucket_fails_closed(self):
         self.mock.stop()

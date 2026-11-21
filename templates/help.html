@@ -59,7 +59,7 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
                 </div>
                 <h3>Bookings &amp; Sessions</h3>
-                <p>How flexible 1-on-1 sessions work, live video calls, rescheduling, and cancellation rules.</p>
+                <p>How to book, join, or cancel a 1-on-1 session.</p>
                 <span class="cat-link">Session guide →</span>
             </div>
 
@@ -160,7 +160,7 @@
                         <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </button>
                     <div class="faq-content">
-                        <p>Sessions are conducted online using voice/video and screen-sharing tools (such as Discord, Google Meet, or Zoom). For gamers, mentors will do live VOD reviews, custom match analysis, and mechanic training drills.</p>
+                        <p>Join the Learn2Play video room from My Sessions once the provider accepts and any required payment is verified. You can use voice, video, and screen sharing during the lesson.</p>
                     </div>
                 </div>
 
@@ -171,7 +171,7 @@
                         <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </button>
                     <div class="faq-content">
-                        <p>If a coach or teacher fails to attend without a 24-hour advance notice, you are entitled to a full reschedule or credit refund. You can also report no-shows directly from your <a href="{{ url_for('main.sessions') if current_user.is_authenticated else url_for('main.auth_page') }}">My Sessions</a> page.</p>
+                        <p>After the scheduled end, report a no-show as an attendance dispute from <a href="{{ url_for('main.sessions') if current_user.is_authenticated else url_for('main.auth_page') }}">My Sessions</a>. An administrator reviews the dispute. If you need a different time, contact your provider before cancelling and requesting a new booking. Contact support about any payment on the original booking.</p>
                     </div>
                 </div>
             </div>

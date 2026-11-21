@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from __init__ import create_app
 from extensions import db
-from models import Appointment, User
+from models import Appointment, RoleApplication, User
 
 
 class JaasMeetingTests(unittest.TestCase):
@@ -143,13 +143,66 @@ class JaasMeetingTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/sessions/{self.appointment.id}/meeting").status_code, 403)
 
     def test_join_endpoint_returns_learn2play_meeting_page(self):
-        self._login_as(self.student)
-        response = self.client.get(f"/api/sessions/{self.appointment.id}/join")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            response.get_json()["url"],
-            f"/sessions/{self.appointment.id}/meeting",
+        for participant in (self.student, self.provider):
+            with self.subTest(participant=participant.id):
+                self._login_as(participant)
+                response = self.client.get(f"/api/sessions/{self.appointment.id}/join")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.get_json()["url"], f"/sessions/{self.appointment.id}/meeting")
+
+    def assert_meeting_denied(self, status):
+        with patch("routes.create_jaas_participant_token") as signer:
+            response = self.client.get(f"/api/sessions/{self.appointment.id}/join")
+            self.assertEqual(response.status_code, status)
+            self.assertNotIn("url", response.get_json())
+            response = self.client.get(f"/sessions/{self.appointment.id}/meeting")
+            self.assertEqual(response.status_code, status)
+            signer.assert_not_called()
+
+    def test_pending_and_rejected_assigned_providers_cannot_join(self):
+        self.provider.roles = ["student"]
+        application = RoleApplication(
+            user_id=self.provider.id, role="mentor", status="pending",
+            bio="Application for the academic teaching track.",
         )
+        db.session.add(application)
+        for status in ("pending", "rejected"):
+            with self.subTest(status=status):
+                application.status = status
+                db.session.commit()
+                self._login_as(self.provider)
+                self.assert_meeting_denied(403)
+
+    def test_assigned_provider_loses_access_when_approval_changes(self):
+        self._meeting_token(self.provider)
+        for roles in (["student"], ["student", "coach"]):
+            with self.subTest(roles=roles):
+                self.provider.roles = roles
+                db.session.commit()
+                self.assert_meeting_denied(403)
+
+    def test_inactive_assigned_provider_cannot_join(self):
+        self.provider.is_active = False
+        db.session.commit()
+        self._login_as(self.provider)
+        with patch("routes.create_jaas_participant_token") as signer:
+            api = self.client.get(f"/api/sessions/{self.appointment.id}/join",
+                                  headers={"Accept": "application/json"})
+            page = self.client.get(f"/sessions/{self.appointment.id}/meeting")
+            for response in (api, page):
+                self.assertEqual(response.status_code, 302)
+                self.assertTrue(response.headers["Location"].startswith("/auth?"))
+            signer.assert_not_called()
+
+    def test_payment_or_room_required_for_both_entry_points(self):
+        self._login_as(self.provider)
+        self.appointment.payment_required = True
+        db.session.commit()
+        self.assert_meeting_denied(403)
+        self.appointment.payment_required = False
+        self.appointment.meeting_room = None
+        db.session.commit()
+        self.assert_meeting_denied(403)
 
     def test_missing_jaas_configuration_fails_safely(self):
         self.app.config["JAAS_PRIVATE_KEY"] = ""

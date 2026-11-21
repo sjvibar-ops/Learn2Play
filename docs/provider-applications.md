@@ -1,5 +1,7 @@
 # Provider applications integration
 
+At signup, users can choose Student, Teacher (Mentor), or Coach. Each choice creates a student account and signs the user in. Teacher and Coach choices open the dashboard with links to complete the profile and submit or track an application under Settings → Roles & access. The onboarding URL selects which guidance to display. Applicants can keep using student features while awaiting a decision.
+
 Selective source: origin/updated at 70bd5e044ac56618b5b922388fead58dd3a6ac52.
 
 ## Security and schema design (reviewed before implementation)

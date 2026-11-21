@@ -16,6 +16,18 @@
 
   <!-- ===== Pending Verification Banner ===== -->
   <p class="form-note" role="status">Manage Mentor and Coach applications in <a href="{{ url_for('main.settings') }}#roles">Settings · Roles &amp; access</a>.</p>
+  {% if onboarding_role %}
+  <section class="pending-verify-banner" aria-labelledby="provider-onboarding-heading">
+    <div>
+      <h2 id="provider-onboarding-heading">{{ 'Teacher' if onboarding_role == 'mentor' else 'Coach' }} onboarding</h2>
+      <p><a href="{{ url_for('main.profile') }}">Complete your profile</a>, then
+        <a href="{{ url_for('main.settings') }}#roles">submit or track your application</a>.
+        Describe your experience, qualifications, and achievements. Supporting evidence is optional.</p>
+      <p>You can use Learn2Play as a student while an administrator reviews your application.
+        Your approved role unlocks provider scheduling and bookings.</p>
+    </div>
+  </section>
+  {% endif %}
   {% if pending_provider_roles %}
   <div class="pending-verify-banner">
     <span class="pvb-icon">⏳</span>

@@ -5,6 +5,14 @@ authorized. The new approval path requires PostgreSQL READ COMMITTED and checks
 that the Phase 2 database guards are installed and enabled. Receipt submission,
 rejection and reconciliation continue through their existing paths.
 
+Verify the actual trigger-to-function bindings, Phase 1 journal and audit
+enforcement, and protection of the reviewed receipt revision before activation.
+The existing readiness function checks enabled Phase 2 trigger names and tables.
+If a receipt submission returns an uncertain commit result, have the student
+reload to check the payment status before retrying. Retain the uploaded receipt
+for reconciliation and confirm that neither payment nor history references it
+before considering cleanup.
+
 ## Prerequisites
 
 1. In an isolated disposable PostgreSQL database, verify a fresh upgrade and an

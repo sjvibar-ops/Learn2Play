@@ -12,7 +12,7 @@ from sqlalchemy import inspect
 from __init__ import create_app
 from config import Config
 from extensions import db
-from models import RoleApplication
+from models import AdminAuditEvent, RoleApplication, User
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +66,8 @@ def test_student_registration_and_duplicate_lookup(registration_app):
     response = client.post(path, data=registration_data("student"))
     assert response.status_code == 201
     assert response.json["pending"] is False
+    assert response.json["redirect"] == "/dashboard"
+    assert client.get("/dashboard").status_code == 200
     response = client.post(path, data=registration_data("student"))
     assert response.status_code == 409
     assert response.json["field"] == "email"
@@ -77,15 +79,72 @@ def test_provider_registration_fields_cannot_grant_roles_or_create_applications(
     monkeypatch.setattr("routes.credentials_bucket", lambda: bucket)
     client = registration_app.test_client()
     data = registration_data(role)
-    data.update(bio="I have several years of relevant teaching and coaching experience.")
+    data.update(registration_intent=role, is_admin="true",
+                bio="I have several years of relevant teaching and coaching experience.")
     data["proofs"] = (io.BytesIO(b"%PDF-1.4\n"), "proof.pdf")
     response = client.post("/api/auth/register", data=data)
     assert response.status_code == 201
     assert response.json["pending"] is False
     assert response.json["user"]["roles"] == ["student"]
+    dashboard_url = f"/dashboard?onboarding={role}"
+    assert response.json["redirect"] == dashboard_url
+    heading = b"Teacher onboarding" if role == "mentor" else b"Coach onboarding"
+    for _ in range(2):
+        dashboard = client.get(dashboard_url)
+        assert dashboard.status_code == 200
+        assert heading in dashboard.data
+        assert b"/settings#roles" in dashboard.data
+    assert client.get("/schedule").status_code == 403
+    assert client.post("/api/auth/login", json={
+        "email": data["email"], "password": data["password"],
+    }).status_code == 200
+    assert client.get("/settings").status_code == 200
     bucket.upload.assert_not_called()
     with registration_app.app_context():
         assert RoleApplication.query.count() == 0
+
+
+def test_unknown_registration_intent_does_not_change_account_access(registration_app):
+    client = registration_app.test_client()
+    data = registration_data("admin")
+    data.update(registration_intent="admin", is_admin="true")
+    response = client.post("/api/auth/register", data=data)
+    assert response.status_code == 201
+    assert response.json["redirect"] == "/dashboard"
+    assert response.json["user"]["roles"] == ["student"]
+    assert client.get("/admin/dashboard").status_code == 403
+
+
+def test_admin_account_changes_require_boolean_and_record_actual_decisions(registration_app):
+    with registration_app.app_context():
+        admin = User(display_name="Admin", email="admin@example.test", password_hash="test", is_admin=True)
+        student = User(display_name="Student", email="student@example.test", password_hash="test")
+        db.session.add_all([admin, student])
+        db.session.commit()
+        admin_id, student_id = admin.id, student.id
+
+    client = registration_app.test_client()
+    set_admin = f"/api/admin/users/{student_id}/set-admin"
+    toggle_active = f"/api/admin/users/{student_id}/toggle-active"
+    with client.session_transaction() as session:
+        session["_user_id"] = str(student_id)
+    assert client.post(set_admin, json={"is_admin": True}).status_code == 403
+    assert client.post(toggle_active, json={}).status_code == 403
+    with client.session_transaction() as session:
+        session["_user_id"] = str(admin_id)
+    assert client.post(set_admin, json={"is_admin": "false"}).status_code == 400
+    assert client.post(set_admin, json={}).status_code == 400
+    assert client.post(set_admin, json={"is_admin": True}).json["is_admin"] is True
+    assert client.post(set_admin, json={"is_admin": True}).json["is_admin"] is True
+    assert client.post(toggle_active, json={}).json["is_active"] is False
+
+    with registration_app.app_context():
+        audit = AdminAuditEvent.query.order_by(AdminAuditEvent.id).all()
+        assert [(row.action, row.before, row.after) for row in audit] == [
+            ("admin_privilege_changed", {"is_admin": False}, {"is_admin": True}),
+            ("account_active_changed", {"is_active": True}, {"is_active": False}),
+        ]
+        assert all(row.actor_id == admin_id and row.target_id == student_id for row in audit)
 
 
 def test_package_error_handler_rolls_back_and_preserves_responses(monkeypatch):

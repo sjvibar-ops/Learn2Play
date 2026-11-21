@@ -6,7 +6,7 @@ The standalone tool is `scripts/audit_database_security.py`. It leaves the older
 
 ## What it inventories
 
-The application table list is explicit: users, appointments, role_applications, credentials, role_application_history, messages, reports, mentor_availability, mentor_unavailable_dates, payments, xp_events, attendance_events and payment_events. It also inspects alembic_version **metadata only**, not its version rows. Similarly named application tables in other non-system/non-managed schemas are discovered as candidates, not assumed to belong to Learn2Play. Missing expected tables in the selected application schema are reported; incomplete output is distinguished from an established missing relation.
+The application table list includes accounts, applications, bookings, messages, reports, scheduling, XP, attendance, payments, and the financial tables ledger_accounts, ledger_transactions, ledger_lines, and admin_audit_events. It also inspects alembic_version **metadata only**. Similarly named tables in other non-system, non-managed schemas are reported as candidates. Missing expected tables in the selected application schema are reported separately from incomplete output.
 
 | Section | Checks |
 | --- | --- |

@@ -15,6 +15,15 @@ Without `DATABASE_URL`, the app uses `learn2play.db` in the project root.
 `python app.py` reads `DATABASE_URL` from the process environment and does
 not load `.env.local`. Application startup does not apply migrations.
 
+## Run tests locally
+
+From PowerShell, run `.\.venv\Scripts\python.exe -B -m pytest -p no:cacheprovider tests`
+with pytest and the project requirements installed in that virtual environment.
+The suite uses disposable SQLite databases and, when PostgreSQL binaries are
+available, starts its own loopback clusters for concurrency and migration
+tests. Browser-script tests use Node.js. Run the suite without production
+database or storage credentials.
+
 ## Supabase database
 
 This app uses SQLAlchemy with Supabase's PostgreSQL database. In the Supabase dashboard, open **Connect** and copy the database connection string. Use the **Session pooler** connection string for a Render service if the direct connection is unreachable over IPv6. Keep the password in the URL encoded if it contains characters such as `@`, `:`, `/`, or `#`.

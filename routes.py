@@ -35,11 +35,13 @@ from supabase import create_client
 from werkzeug.utils import secure_filename
 
 if __package__:
+    from .admin_audit import AuditAction, AuditReason, AuditTarget, record_admin_event
     from .extensions import db
     from .reconciliation import ReconciliationError, lock_booking_end, end_booking, text_field
     from .scheduling import lock_schedules, overlaps, participant_bookings, reservation_errors
     from .models import Appointment, Credential, MentorAvailability, MentorUnavailableDate, Message, Report, RoleApplication, RoleApplicationHistory, User, XpEvent, AttendanceEvent, utcnow
 else:
+    from admin_audit import AuditAction, AuditReason, AuditTarget, record_admin_event
     from extensions import db
     from reconciliation import ReconciliationError, lock_booking_end, end_booking, text_field
     from scheduling import lock_schedules, overlaps, participant_bookings, reservation_errors
@@ -557,11 +559,16 @@ def register():
         return error("We couldn't create your account. Please try again.", 500)
 
     login_user(user)
+    intent = form.get("registration_intent")
+    dashboard_url = (
+        url_for("main.dashboard", onboarding=intent)
+        if intent in VERIFIED_ROLES else url_for("main.dashboard")
+    )
     return jsonify({
         "ok": True,
         "pending": False,
         "message": "Your student account is active. Welcome to Learn2Play! You can apply to become a Mentor or Coach from your account after you sign in.",
-        "redirect": url_for("main.dashboard"),
+        "redirect": dashboard_url,
         "user": user_data(user),
     }), 201
 
@@ -1926,29 +1933,33 @@ def weekly_leaderboard_data():
 
 
 
-@main.route("/api/sessions/<int:booking_id>/join", methods=["GET"])
-@login_required
-def join_session(booking_id):
-    appt = db.session.get(Appointment, booking_id)
+def meeting_access_error(appt):
     if not appt or (appt.student_id != current_user.id and appt.provider_id != current_user.id):
         return error("Session not found.", 404)
+    if appt.provider_id == current_user.id and not provider_approved_for_role(current_user, appt.role):
+        return error("You are not approved for this booking role.", 403)
     if appt.status not in ("accepted", "scheduled") or not appt.meeting_room:
         return error("The mentor has not confirmed this session.", 403)
     if not appt.payment_satisfied:
         return error("Payment must be verified before joining.", 403)
-    return jsonify({"ok": True, "url": url_for("main.meeting_page", booking_id=appt.id)})
+
+
+@main.route("/api/sessions/<int:booking_id>/join", methods=["GET"])
+@login_required
+def join_session(booking_id):
+    problem = meeting_access_error(db.session.get(Appointment, booking_id))
+    if problem is not None:
+        return problem
+    return jsonify({"ok": True, "url": url_for("main.meeting_page", booking_id=booking_id)})
 
 
 @main.route("/sessions/<int:booking_id>/meeting", methods=["GET"])
 @login_required
 def meeting_page(booking_id):
     appt = db.session.get(Appointment, booking_id)
-    if not appt or (appt.student_id != current_user.id and appt.provider_id != current_user.id):
-        return error("Session not found.", 404)
-    if appt.status not in ("accepted", "scheduled") or not appt.meeting_room:
-        return error("The mentor has not confirmed this session.", 403)
-    if not appt.payment_satisfied:
-        return error("Payment must be verified before joining.", 403)
+    problem = meeting_access_error(appt)
+    if problem is not None:
+        return problem
     try:
         participant_token = create_jaas_participant_token(appt, current_user)
     except JaasConfigurationError:
@@ -1995,12 +2006,15 @@ def dashboard():
         apps = RoleApplication.query.filter_by(user_id=current_user.id, status="pending").all()
         pending_provider_roles = [a.role for a in apps]
 
+    intent = request.args.get("onboarding")
+    onboarding_role = intent if intent in VERIFIED_ROLES and intent not in current_user.roles else None
     return render_template(
         "shared/dashboard.html",
         next_session=next_session,
         prev_session=prev_session,
         format_dt_pht=format_dt_pht,
         pending_provider_roles=pending_provider_roles,
+        onboarding_role=onboarding_role,
     )
 
 
@@ -2209,12 +2223,17 @@ def admin_list_users():
 @main.route("/api/admin/users/<int:user_id>/toggle-active", methods=["POST"])
 @admin_required
 def admin_toggle_user_active(user_id):
-    user = db.session.get(User, user_id)
+    user = db.session.get(User, user_id, populate_existing=True, with_for_update=True)
     if not user:
         return error("User not found.", 404)
     if user.id == current_user.id:
         return error("You cannot deactivate your own account.", 400)
-    user.is_active = not user.is_active
+    was_active = user.is_active
+    user.is_active = not was_active
+    record_admin_event(
+        actor=current_user, action=AuditAction.ACCOUNT_ACTIVE_CHANGED, target_type=AuditTarget.USER,
+        target_id=user.id, before={"is_active": was_active}, after={"is_active": user.is_active},
+    )
     db.session.commit()
     state = "activated" if user.is_active else "deactivated"
     return jsonify({"ok": True, "message": f"User {state}.", "is_active": user.is_active})
@@ -2223,14 +2242,23 @@ def admin_toggle_user_active(user_id):
 @main.route("/api/admin/users/<int:user_id>/set-admin", methods=["POST"])
 @admin_required
 def admin_set_admin(user_id):
-    user = db.session.get(User, user_id)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or type(data.get("is_admin")) is not bool:
+        return error("Provide true or false for administrator access.")
+    user = db.session.get(User, user_id, populate_existing=True, with_for_update=True)
     if not user:
         return error("User not found.", 404)
     if user.id == current_user.id:
         return error("You cannot change your own admin status.", 400)
-    data = request.get_json(silent=True) or {}
-    user.is_admin = bool(data.get("is_admin", False))
-    db.session.commit()
+    if user.is_admin != data["is_admin"]:
+        was_admin = user.is_admin
+        user.is_admin = data["is_admin"]
+        record_admin_event(
+            actor=current_user, action=AuditAction.ADMIN_PRIVILEGE_CHANGED, target_type=AuditTarget.USER,
+            target_id=user.id, reason=AuditReason.PRIVILEGE_REVIEW,
+            before={"is_admin": was_admin}, after={"is_admin": user.is_admin},
+        )
+        db.session.commit()
     return jsonify({"ok": True, "message": "Admin status updated.", "is_admin": user.is_admin})
 
 

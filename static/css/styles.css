@@ -2039,7 +2039,7 @@ a.side-item { text-decoration: none; }
 
 .r-field { display: block; color: var(--txt2); font-size: 13px; margin-bottom: 16px; }
 .r-field em { color: var(--txt3); font-style: normal; }
-.r-field > input, .r-field > textarea, .r-password-wrap input {
+.r-field > input, .r-field > select, .r-field > textarea, .r-password-wrap input {
   display: block; width: 100%; margin-top: 8px; padding: 12px 14px;
   background: var(--card); border: 1px solid var(--line); border-radius: 10px;
   color: var(--txt); font-size: 14px; outline: none; resize: vertical;
@@ -2059,7 +2059,7 @@ a.side-item { text-decoration: none; }
   width: 18px; height: 18px; stroke: currentColor; fill: none;
   stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
 }
-.r-field > input:focus, .r-field > textarea:focus, .r-password-wrap input:focus { border-color: var(--purple); box-shadow: 0 0 0 3px rgba(124,108,245,.18); }
+.r-field > input:focus, .r-field > select:focus, .r-field > textarea:focus, .r-password-wrap input:focus { border-color: var(--purple); box-shadow: 0 0 0 3px rgba(124,108,245,.18); }
 .r-field > input::placeholder, .r-field > textarea::placeholder { color: var(--txt3); }
 .r-field small { display: block; color: var(--txt3); font-size: 12px; margin-top: 6px; }
 .r-field.invalid > input, .r-field.invalid > textarea, .r-field.invalid .r-password-wrap input { border-color: var(--danger); }

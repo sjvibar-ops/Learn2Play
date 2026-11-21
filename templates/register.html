@@ -17,10 +17,22 @@
     </header>
 
     <h1>Create your account</h1>
-    <p class="sub">Create a free student account in a minute. No certificates or documents are needed to sign up.</p>
+    <p class="sub">Create a free Learn2Play account. No certificates or documents are needed to sign up.</p>
     <p class="step-note" id="providerNote">Want to teach or coach? Once your account is created, you can apply to become a Mentor (Teacher), a Coach, or both from your account. Supporting evidence such as certificates is optional, and an administrator reviews each application.</p>
 
-    <form id="regForm" novalidate enctype="multipart/form-data">
+    <form id="regForm" method="post" action="{{ url_for('main.register') }}" novalidate enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <fieldset class="reg-step" aria-describedby="providerNote">
+        <legend>What would you like to do?</legend>
+        <label class="r-field" for="registrationIntent">I want to
+          <select id="registrationIntent" name="registration_intent">
+            <option value="student">Learn as a student</option>
+            <option value="mentor">Apply to teach as a mentor</option>
+            <option value="coach">Apply to coach</option>
+          </select>
+        </label>
+      </fieldset>
 
       <fieldset class="reg-step">
         <legend>Learning paths <small>(optional browser preferences)</small></legend>

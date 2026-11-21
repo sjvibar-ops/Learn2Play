@@ -168,17 +168,21 @@ def test_audit_insert_failure_rolls_back_submission_and_only_discards_new_upload
     f.storage.remove.assert_called_once_with([f.storage.upload.call_args.args[0]])
 
 
-def test_failed_resubmission_preserves_previous_event_and_review(f):
+@pytest.mark.parametrize("failure_point", ["flush", "commit"])
+def test_failed_resubmission_preserves_previous_event_and_review(f, failure_point):
     assert f.upload().status_code == 200
     assert f.review('reject', reason='Receipt does not match transfer').status_code == 200
     f.login(f.student)
     old = f.payment.receipt_path
-    with patch.object(db.session, 'commit', side_effect=SQLAlchemyError('isolated commit failure')):
+    with patch.object(db.session, failure_point, side_effect=SQLAlchemyError("isolated write failure")):
         assert f.upload().status_code == 503
     assert f.payment.status == 'REJECTED' and f.payment.submission_revision == 1
     assert f.payment.receipt_path == old
     assert len(rows(f)) == 2
-    f.storage.remove.assert_called_once_with([f.storage.upload.call_args.args[0]])
+    if failure_point == "flush":
+        f.storage.remove.assert_called_once_with([f.storage.upload.call_args.args[0]])
+    else:
+        f.storage.remove.assert_not_called()
 
 
 def test_failed_review_rolls_back_both_projection_and_event(f):

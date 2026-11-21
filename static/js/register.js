@@ -1,6 +1,6 @@
 "use strict";
 
-// Learn2Play: student registration page (Mentor/Coach applications happen after sign-up)
+// Provider applications happen after account creation.
 (() => {
   const $ = (id) => document.getElementById(id);
 
@@ -102,6 +102,7 @@
     body.append("email", $("email").value.trim());
     body.append("password", $("password").value);
     body.append("confirm_password", $("confirmPassword").value);
+    body.append("registration_intent", $("registrationIntent").value);
     if ($("ack").checked) body.append("acknowledged", "true");
 
     $("submit").disabled = true;

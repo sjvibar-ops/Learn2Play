@@ -272,6 +272,7 @@ def submit(booking_id):
     except Exception:
         db.session.rollback()
         return error("Receipt storage is unavailable. Please retry.", 503)
+    commit_started = False
     try:
         payment = Payment.query.filter_by(id=payment_id, appointment_id=booking_id,
                                           student_id=student_id).populate_existing().with_for_update().first()
@@ -294,9 +295,16 @@ def submit(booking_id):
         payment.reviewed_at = None
         payment.rejection_reason = None
         record_event(payment, "RESUBMITTED" if previous_status == "REJECTED" else "SUBMITTED", previous_status, student_id)
+        db.session.flush()
+        commit_started = True
         db.session.commit()
     except SQLAlchemyError:
         db.session.rollback()
+        # A lost commit acknowledgement can leave both the payment and its
+        # history pointing at this receipt. Keep it if the outcome is unknown.
+        if commit_started:
+            current_app.logger.warning("Receipt cleanup deferred for payment %s; commit outcome is uncertain.", payment_id)
+            return error("Payment submission could not be confirmed. Reload to check its status before retrying.", 503)
         discard(path)
         return error("Payment could not be saved. Please retry.", 503)
     # Committed historical receipts are retained; only uncommitted uploads are discarded.

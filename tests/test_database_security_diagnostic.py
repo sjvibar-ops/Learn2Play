@@ -533,7 +533,9 @@ class QueryAndAssessmentTests(unittest.TestCase):
                 for n in cls.body:
                     if isinstance(n,ast.Assign) and any(isinstance(k,ast.Name) and k.id=="__tablename__" for k in n.targets):tables.add(ast.literal_eval(n.value))
         self.assertEqual(set(self.tool.APPLICATION_TABLES),tables)
-        self.assertEqual(len(tables),13)
+        self.assertEqual(set(self.tool.REQUIRED_ACCESS), tables)
+        for table in ("ledger_accounts", "ledger_transactions", "ledger_lines", "admin_audit_events"):
+            self.assertEqual(self.tool.REQUIRED_ACCESS[table], "SELECT INSERT")
         self.assertEqual(self.tool.REQUIRED_ACCESS["role_application_history"],"SELECT INSERT")
         self.assertIn("LEFT JOIN LATERAL",self.tool.QUERIES["default_acl"])
         self.assertIn("explicitly_empty_acl",self.tool.QUERIES["default_acl"])
