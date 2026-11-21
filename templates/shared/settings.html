@@ -389,6 +389,21 @@
                         <p class="reg-path-note">Activation is saved in this browser only. Teaching and coaching services require approval, and connected account-wide activation still needs backend support.</p>
                     </div>
 
+                    {% if config.DISCORD_LINKING_ENABLED %}
+                    <section class="role-applications" aria-labelledby="discord-account-heading">
+                        <h3 id="discord-account-heading">Discord account</h3>
+                        <p>Link Discord to check your Learn2Play server membership.</p>
+                        <form method="post" action="{{ url_for('discord_accounts.connect') }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="view-btn">Link Discord</button>
+                        </form>
+                        <form method="post" action="{{ url_for('discord_accounts.disconnect') }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="view-btn">Unlink Discord</button>
+                        </form>
+                        <a href="{{ url_for('discord_accounts.guild_status') }}">Check server membership</a>
+                    </section>
+                    {% endif %}
                     <section class="role-applications" id="roleApplications" aria-labelledby="roleApplicationsTitle">
                         <div class="role-applications-head">
                             <h3 id="roleApplicationsTitle">Teacher &amp; Coach applications</h3>

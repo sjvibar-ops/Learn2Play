@@ -620,3 +620,11 @@ class LedgerLine(db.Model):
 @event.listens_for(AdminAuditEvent, "before_delete")
 def immutable_admin_audit_event(mapper, connection, target):
     raise ValueError("Administrator audit events are append-only.")
+
+
+class DiscordAccount(db.Model):
+    __tablename__ = "discord_accounts"
+
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    discord_id = db.Column(db.String(32), nullable=False, unique=True)
+    linked_at = db.Column(db.DateTime, nullable=False, default=utcnow)

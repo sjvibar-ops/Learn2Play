@@ -31,6 +31,13 @@ def validate_production_database_url(database_url):
 
 
 class Config:
+    DISCORD_LINKING_ENABLED = os.environ.get("DISCORD_LINKING_ENABLED") == "true"
+    DISCORD_CLIENT_ID = os.environ.get("DISCORD_CLIENT_ID")
+    DISCORD_CLIENT_SECRET = os.environ.get("DISCORD_CLIENT_SECRET")
+    DISCORD_REDIRECT_URI = os.environ.get("DISCORD_REDIRECT_URI")
+    DISCORD_GUILD_ID = os.environ.get("DISCORD_GUILD_ID")
+    DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
+
     # Production hosts must provide a stable, high-entropy secret explicitly.
     # Local development gets a process-local secret unless one is supplied.
     app_environment = os.environ.get("APP_ENV", "development").strip().lower()

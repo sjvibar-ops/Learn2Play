@@ -14,7 +14,7 @@ ROOT=Path(__file__).resolve().parents[1]
 class GamificationMigrationGraphTests(unittest.TestCase):
     def test_single_head_preserves_both_chains(self):
         script=ScriptDirectory(str(ROOT/'migrations'))
-        self.assertEqual(script.get_heads(),['db71a6e5c902'])
+        self.assertEqual(script.get_heads(),['4f78ec3f41a2'])
         self.assertEqual(script.get_revision('c7e4a1b92d60').down_revision,'b9d3e7f02c84')
         self.assertEqual(set(script.get_revision('e6a1c9d84b20').down_revision),{'c1a82b7d43ef','d2b7a4e9310c'})
         self.assertEqual(script.get_revision('c1a82b7d43ef').down_revision,'9e45f7e7aa32')

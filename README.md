@@ -36,6 +36,11 @@ A populated database without a recorded revision needs a schema comparison
 before upgrade. Preserve the database and its accounts while diagnosing it.
 The final SQLite revision restores the transfer indexes lost during the payment
 history migration. It stops if existing verified payments collide.
+Older revisions may rebuild populated tables and hit SQLite foreign-key
+restrictions. If an upgrade fails, keep the verified backup and check the
+recorded revision and temporary tables before retrying. Rehearse recovery on
+a disposable copy and verify the original rows and foreign keys before
+committing any recovery on the existing file.
 
 ## Run tests locally
 

@@ -81,6 +81,11 @@ def create_app(config_overrides=None):
     else:
         from payments import payments
     app.register_blueprint(payments)
+    if __package__:
+        from .discord_accounts import discord
+    else:
+        from discord_accounts import discord
+    app.register_blueprint(discord)
 
     register_error_handlers(app)
 

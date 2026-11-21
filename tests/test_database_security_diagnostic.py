@@ -590,10 +590,10 @@ class MigrationSourceTests(unittest.TestCase):
             self.assertIsNone(values.get("depends_on"))
             parent=values["down_revision"]
             revisions[rev]=parent if isinstance(parent,tuple) else (() if parent is None else (parent,))
-        self.assertEqual(len(revisions),17)
+        self.assertEqual(len(revisions),18)
         parents={p for values in revisions.values() for p in values}
         self.assertLessEqual(parents,set(revisions))
-        self.assertEqual(set(revisions)-parents,{"db71a6e5c902"})
+        self.assertEqual(set(revisions)-parents,{"4f78ec3f41a2"})
         self.assertEqual(revisions["db71a6e5c902"],("c83d9f2a71e4",))
         self.assertEqual(revisions["a6d2f9c83b10"],("f4c2a8d91e70",))
         self.assertEqual({rev for rev,parents in revisions.items() if not parents},{"0720c7d1e4ca"})
@@ -604,7 +604,7 @@ class MigrationSourceTests(unittest.TestCase):
             active.add(rev)
             for parent in revisions[rev]:visit(parent)
             active.remove(rev);visited.add(rev)
-        visit("db71a6e5c902")
+        visit("4f78ec3f41a2")
         self.assertEqual(visited,set(revisions))
 
     def test_new_migration_is_additive_and_downgrade_refuses_data_loss(self):

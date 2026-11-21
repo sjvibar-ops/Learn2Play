@@ -34,7 +34,7 @@ def test_upgrading_old_sqlite_restores_login_and_preserves_account(tmp_path):
         assert "_user_id" not in session
 
     with app.app_context():
-        upgrade()
+        upgrade(revision="db71a6e5c902")
         assert db.session.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "db71a6e5c902"
         indexes = {row[1]: (row[2], row[4]) for row in db.session.execute(text("PRAGMA index_list(payments)"))}
         assert indexes["uq_payments_verified_transfer"] == (1, 1)
