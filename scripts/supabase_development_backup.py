@@ -65,6 +65,54 @@ def destination_for(home, repository, name):
     return destination
 
 
+def verify_directory_owner(path, advapi, kernel):
+    get_owner = advapi.GetNamedSecurityInfoW
+    get_owner.argtypes = (wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD,
+                         ctypes.POINTER(wintypes.LPVOID), wintypes.LPVOID, wintypes.LPVOID,
+                         wintypes.LPVOID, ctypes.POINTER(wintypes.LPVOID))
+    get_owner.restype = wintypes.DWORD
+    process = kernel.GetCurrentProcess
+    process.argtypes = ()
+    process.restype = wintypes.HANDLE
+    close = kernel.CloseHandle
+    close.argtypes = (wintypes.HANDLE,)
+    close.restype = wintypes.BOOL
+    open_token = advapi.OpenProcessToken
+    open_token.argtypes = (wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE))
+    open_token.restype = wintypes.BOOL
+    token_info = advapi.GetTokenInformation
+    token_info.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPVOID,
+                           wintypes.DWORD, ctypes.POINTER(wintypes.DWORD))
+    token_info.restype = wintypes.BOOL
+    equal_sid = advapi.EqualSid
+    equal_sid.argtypes = (wintypes.LPVOID, wintypes.LPVOID)
+    equal_sid.restype = wintypes.BOOL
+
+    token = wintypes.HANDLE()
+    if not open_token(process(), 0x0008, ctypes.byref(token)):  # TOKEN_QUERY
+        raise catalog.Blocked("Could not confirm the current Windows user.")
+    descriptor = wintypes.LPVOID()
+    try:
+        size = wintypes.DWORD()
+        token_info(token, 1, None, 0, ctypes.byref(size))  # TokenUser
+        if not size.value:
+            raise catalog.Blocked("Could not determine the Windows user SID.")
+        user_info = ctypes.create_string_buffer(size.value)
+        if not token_info(token, 1, user_info, size, ctypes.byref(size)):
+            raise catalog.Blocked("Could not read the Windows user SID.")
+        # TOKEN_USER begins with SID_AND_ATTRIBUTES, whose first member is the SID pointer.
+        user_sid = ctypes.cast(user_info, ctypes.POINTER(wintypes.LPVOID)).contents
+        owner = wintypes.LPVOID()
+        if get_owner(str(path), 1, 1, ctypes.byref(owner), None, None, None, ctypes.byref(descriptor)):
+            raise catalog.Blocked("Could not read the restricted backup directory owner.")
+        if not owner or not user_sid or not equal_sid(owner, user_sid):
+            raise catalog.Blocked("The backup directory owner is not the current Windows user. No export attempted.")
+    finally:
+        if descriptor:
+            kernel.LocalFree(descriptor)
+        close(token)
+
+
 def create_restricted_directory(path):
     # Supply a protected DACL at creation so the folder never inherits a broad ACL.
     # Owner Rights and LocalSystem are the only access entries. Child files inherit them.
@@ -105,12 +153,16 @@ def create_restricted_directory(path):
         attributes = SecurityAttributes(ctypes.sizeof(SecurityAttributes), descriptor, False)
         if not create(str(path), ctypes.byref(attributes)):
             raise catalog.Blocked("Cannot exclusively create the restricted backup directory.")
+        verify_directory_owner(path, advapi, kernel)
     finally:
         free(descriptor)
 
 
-def run_tool(tool, arguments, env=None):
-    result = subprocess.run([str(tool), *arguments], env=env, capture_output=True, check=False)
+def run_tool(tool, arguments, env=None, *, discard_stdout=False):
+    result = subprocess.run(
+        [str(tool), *arguments], env=env, stdout=subprocess.DEVNULL if discard_stdout else subprocess.PIPE,
+        stderr=subprocess.PIPE, check=False,
+    )
     if result.returncode or result.stderr:
         raise catalog.Blocked(f"{tool.stem} failed or emitted a warning. Tool details suppressed.")
     return result.stdout
@@ -159,6 +211,14 @@ def verify_listing(listing, sequences):
         raise catalog.Blocked("Archive listing does not contain the complete approved table and sequence inventory.")
 
 
+def verify_archive(restore, archive, sequences):
+    verify_listing(run_tool(restore, ["--list", str(archive)]), sequences)
+    # Unfiltered script output forces pg_restore to decode the payload. Direct it
+    # to the OS null device from process creation so no SQL is kept or displayed.
+    run_tool(restore, ["--format=custom", "--exit-on-error", "--file=-", str(archive)],
+             discard_stdout=True)
+
+
 def archive_checksum(archive):
     with archive.open("rb") as stream:
         if stream.read(5) != b"PGDMP":
@@ -180,7 +240,7 @@ def write_manifest(destination, archive, checksum):
         "archive_size_bytes": archive.stat().st_size,
         "sha256": checksum,
         "backup_scope": SCOPE,
-        "status": "ARCHIVE CREATED AND LISTED",
+        "status": "ARCHIVE CREATED AND VERIFIED",
         "restore_verified": False,
     }
     with (destination / "manifest.partial").open("x", encoding="utf-8") as output:
@@ -216,7 +276,7 @@ def create_archive(destination, tool_pair, parameters, args, connect, row_factor
                 child_env.pop("PGPASSWORD", None)
         finally:
             connection.execute("ROLLBACK")
-    verify_listing(run_tool(restore, ["--list", str(archive)]), sequences)
+    verify_archive(restore, archive, sequences)
     write_manifest(destination, archive, archive_checksum(archive))
 
 
@@ -253,7 +313,7 @@ def main():
             getpass.getpass("Development DATABASE_URL containing the password (hidden): "), args, conninfo_to_dict,
         )
     create_archive(destination, tool_pair, parameters, args, connect, dict_row, make_conninfo)
-    print("Archive created, checksummed, and listed. Restore verification requires a separate approved restore.")
+    print("ARCHIVE CREATED AND VERIFIED. Restore verification requires a separate approved restore.")
 
 
 def cli():

@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import subprocess
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -123,7 +124,7 @@ class DevelopmentBackupTests(unittest.TestCase):
             manifest = (destination / "manifest.json").read_text(encoding="utf-8")
             result = json.loads(manifest)
             self.assertEqual(result["sha256"], checksum)
-            self.assertEqual(result["status"], "ARCHIVE CREATED AND LISTED")
+            self.assertEqual(result["status"], "ARCHIVE CREATED AND VERIFIED")
             self.assertFalse(result["restore_verified"])
             self.assertNotIn(PASSWORD, manifest)
             self.assertFalse(archive.exists())
@@ -134,6 +135,54 @@ class DevelopmentBackupTests(unittest.TestCase):
         ) as output:
             self.assertEqual(backup.cli(), 1)
         self.assertNotIn(PASSWORD, output.getvalue())
+
+    def test_payload_verification_decodes_to_null_without_database_arguments(self):
+        listing = b"".join(f"1; 0 1 TABLE DATA public {name} owner\n".encode() for name in backup.TABLES)
+        restore = Path("pg_restore.exe")
+        archive = Path("synthetic.dump.partial")
+        with patch.object(backup.subprocess, "run", side_effect=[
+            SimpleNamespace(returncode=0, stderr=b"", stdout=listing),
+            SimpleNamespace(returncode=0, stderr=b"", stdout=None),
+        ]) as run:
+            backup.verify_archive(restore, archive, set())
+        args, options = run.call_args
+        self.assertEqual(args[0], [str(restore), "--format=custom", "--exit-on-error", "--file=-", str(archive)])
+        self.assertEqual(options["stdout"], subprocess.DEVNULL)
+        self.assertIsNone(options["env"])
+
+    def test_payload_failure_keeps_partial_bytes_and_never_checksums_or_finalizes(self):
+        dump, restore = Path("pg_dump.exe"), Path("pg_restore.exe")
+        listing = b"".join(f"1; 0 1 TABLE DATA public {name} owner\n".encode() for name in backup.TABLES)
+        parameters = dict(host=self.host, user="fixture", password=PASSWORD, dbname="postgres", sslmode="verify-full")
+        for payload, error in (
+            (b"PGDMP", b"unexpected end of file"),
+            (b"PGDMP malformed payload fixture", b"decompression failure"),
+            (b"PGDMP command failure fixture", b"offline tool error"),
+        ):
+            with self.subTest(error=error), TemporaryDirectory() as root:
+                destination = Path(root)
+                archive = destination / "development.dump.partial"
+                archive.write_bytes(payload)
+                connection = MagicMock()
+                connection.pgconn.ssl_in_use = True
+                connection.execute.return_value.fetchone.return_value = {"snapshot": "00000001-00000002-1"}
+                connect = MagicMock()
+                connect.return_value.__enter__.return_value = connection
+                checksum = Mock()
+                with patch.dict(backup.create_archive.__globals__, {
+                    "create_restricted_directory": Mock(), "verify_scope": Mock(return_value=set()),
+                    "archive_checksum": checksum,
+                }), patch.object(backup.subprocess, "run", side_effect=[
+                    SimpleNamespace(returncode=0, stderr=b"", stdout=b""),
+                    SimpleNamespace(returncode=0, stderr=b"", stdout=listing),
+                    SimpleNamespace(returncode=1, stderr=error + PASSWORD.encode(), stdout=None),
+                ]), self.assertRaises(Blocked) as failure:
+                    backup.create_archive(destination, (dump, restore), parameters, self.args,
+                                          connect, None, make_conninfo)
+                self.assertNotIn(PASSWORD, str(failure.exception))
+                checksum.assert_not_called()
+                self.assertEqual(archive.read_bytes(), payload)
+                self.assertEqual({path.name for path in destination.iterdir()}, {archive.name})
 
     @unittest.skipUnless(os.name == "nt", "Windows backup directory")
     def test_restricted_directory_is_writable_and_created_exclusively(self):
