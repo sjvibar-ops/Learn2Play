@@ -86,6 +86,14 @@ def create_app(config_overrides=None):
     else:
         from discord_accounts import discord
     app.register_blueprint(discord)
+    if __package__:
+        from .discord_rooms import rooms
+        from .reschedules import reschedules
+    else:
+        from discord_rooms import rooms
+        from reschedules import reschedules
+    app.register_blueprint(rooms)
+    app.register_blueprint(reschedules)
 
     register_error_handlers(app)
 

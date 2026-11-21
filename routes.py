@@ -302,6 +302,10 @@ def credentials_bucket():
         raise RuntimeError("Supabase Storage credentials are not configured.")
 
     client = create_client(supabase_url, service_role_key)
+    metadata = client.storage.get_bucket(CREDENTIALS_BUCKET)
+    public = metadata.get("public") if isinstance(metadata, dict) else getattr(metadata, "public", None)
+    if public is not False:
+        raise RuntimeError("Credential storage must be private")
     return client.storage.from_(CREDENTIALS_BUCKET)
 
 
@@ -842,7 +846,7 @@ def download_credential(credential_id):
             download_name=cred.original_name,
         )
     except Exception:
-        current_app.logger.exception("Credential download from Storage failed")
+        current_app.logger.warning("Credential download from Storage failed; Storage details suppressed.")
         return error("Unable to retrieve the credential file.", 500)
 
 

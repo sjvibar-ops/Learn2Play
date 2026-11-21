@@ -172,7 +172,7 @@
         </div>
     </main>
 
-    <script>window.L2UserId = {{ current_user.id }};</script>
+    <script>window.L2UserId = {{ current_user.id }}; window.L2DiscordSessions = {{ config.DISCORD_SESSIONS_ENABLED|tojson }};</script>
     <script src="{{ url_for('static', filename='js/sessions.js') }}" defer></script>
 </body>
 </html>

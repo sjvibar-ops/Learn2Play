@@ -18,6 +18,7 @@ APPLICATION_TABLES = (
     "reports", "mentor_availability", "mentor_unavailable_dates", "payments",
     "xp_events", "attendance_events", "payment_events",
     "ledger_accounts", "ledger_transactions", "ledger_lines", "admin_audit_events", "discord_accounts",
+    "discord_rooms", "discord_room_events", "reschedule_proposals",
 )
 REQUIRED_ACCESS = {
     "users": "SELECT INSERT UPDATE", "appointments": "SELECT INSERT UPDATE",
@@ -31,6 +32,8 @@ REQUIRED_ACCESS = {
     "ledger_accounts": "SELECT INSERT", "ledger_transactions": "SELECT INSERT",
     "ledger_lines": "SELECT INSERT", "admin_audit_events": "SELECT INSERT",
     "discord_accounts": "SELECT INSERT DELETE",
+    "discord_rooms": "SELECT INSERT UPDATE", "discord_room_events": "SELECT INSERT",
+    "reschedule_proposals": "SELECT INSERT UPDATE",
 }
 SESSION_OPTIONS = (
     "-c default_transaction_read_only=on -c search_path=pg_catalog -c statement_timeout=15000 "

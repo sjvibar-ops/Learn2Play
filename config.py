@@ -31,6 +31,7 @@ def validate_production_database_url(database_url):
 
 
 class Config:
+    DISCORD_SESSIONS_ENABLED = os.environ.get("DISCORD_SESSIONS_ENABLED") == "true"
     DISCORD_LINKING_ENABLED = os.environ.get("DISCORD_LINKING_ENABLED") == "true"
     DISCORD_CLIENT_ID = os.environ.get("DISCORD_CLIENT_ID")
     DISCORD_CLIENT_SECRET = os.environ.get("DISCORD_CLIENT_SECRET")

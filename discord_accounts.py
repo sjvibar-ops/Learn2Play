@@ -10,11 +10,13 @@ from sqlalchemy.exc import IntegrityError
 if __package__:
     from . import discord_oauth as oauth
     from .extensions import db
-    from .models import DiscordAccount, User
+    from .models import DiscordAccount, DiscordRoom, User
+    from .scheduling import lock_schedules, reservation_errors
 else:
     import discord_oauth as oauth
     from extensions import db
-    from models import DiscordAccount, User
+    from models import DiscordAccount, DiscordRoom, User
+    from scheduling import lock_schedules, reservation_errors
 
 discord = Blueprint("discord_accounts", __name__, url_prefix="/api/me/discord")
 
@@ -105,7 +107,15 @@ def guild_status():
 
 @discord.post("/disconnect")
 @login_required
+@reservation_errors
 def disconnect():
+    lock_schedules(current_user.id)
+    account = db.session.get(DiscordAccount, current_user.id)
+    if account and inspect(db.session.connection()).has_table("discord_rooms") and DiscordRoom.query.filter(
+        DiscordRoom.state.in_(("provisioning", "ready")),
+        (DiscordRoom.student_discord_id == account.discord_id) | (DiscordRoom.provider_discord_id == account.discord_id),
+    ).first():
+        return jsonify(ok=False, message="Ask an administrator to close your voice rooms before unlinking."), 409
     session.pop(oauth.SESSION_KEY, None)
     DiscordAccount.query.filter_by(user_id=current_user.id).delete()
     db.session.commit()

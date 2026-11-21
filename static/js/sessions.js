@@ -170,11 +170,46 @@
     }
 
     const escapeHtml = value => String(value || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+    let scheduleReady = false;
+    let sessionRequestBusy = false;
+    const philippineSchedule = new Intl.DateTimeFormat("en-PH", {
+        dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Manila"
+    });
+
+    function coordinationControls(booking, proposal, now) {
+        if (!["accepted", "scheduled"].includes(booking.status) || booking.attendance_disputed) return "";
+        const id = Number(booking.id);
+        const future = Date.parse(booking.start_time) > now;
+        const discordButton = window.L2DiscordSessions && booking.payment_satisfied !== false
+            ? `<button type="button" class="session-action booking-action" data-id="${id}" data-action="discord">Discord voice room</button>` : "";
+        if (!scheduleReady) return discordButton;
+        if (proposal) {
+            const own = proposal.requested_by === window.L2UserId;
+            const option = (action, title) => `<button type="button" class="session-action booking-action"
+                data-id="${id}" data-action="${action}" data-proposal="${Number(proposal.id)}">${title}</button>`;
+            return `${discordButton}<div><p>Proposed for ${escapeHtml(philippineSchedule.format(new Date(proposal.proposed_start)))}
+                Philippine time. The current schedule stays in place until acceptance.</p>
+                ${own ? option("withdraw", "Withdraw proposal") : (future ? option("accept-time", "Accept new time") : "") + option("reject-time", "Keep current time")}</div>`;
+        }
+        if (!future) return discordButton;
+        return `${discordButton}<details class="reschedule-controls"><summary>Propose a new time</summary>
+            <form class="reschedule-form" data-id="${id}">
+                <p>Use Philippine time. The other participant must accept the change.</p>
+                <label>Date <input name="date" type="date" required></label>
+                <label>Time <input name="time" type="time" step="3600" required></label>
+                <button type="submit" class="session-action">Send proposal</button>
+            </form></details>`;
+    }
+
     async function loadBookings() {
         try {
             const data = await fetch("/api/bookings", {credentials:"same-origin"}).then(r => r.json());
             if (!data.ok) throw new Error(data.message || "Could not load bookings.");
             const bookings = data.bookings || [];
+            const schedule = await fetch("/api/bookings/reschedule-proposals", {credentials:"same-origin"})
+                .then(r => r.ok ? r.json() : null).catch(() => null);
+            scheduleReady = schedule?.ok === true;
+            const proposals = schedule?.proposals || {};
             const now = Date.now();
             if (sessionList) {
                 const mine = bookings.filter(b => b.student_id === window.L2UserId);
@@ -202,6 +237,7 @@
                         <div class="student-educator-row"><div class="student-educator-avatar" aria-hidden="true">${escapeHtml(String(b.mentor || "E").trim().slice(0, 1).toUpperCase())}</div><div class="student-educator-copy"><strong>${escapeHtml(b.mentor)}</strong><span>${escapeHtml(b.topic || "Learning session")}</span></div></div>
                         <div class="student-session-focus"><span>SESSION TOPIC</span><p>${escapeHtml(b.notes || b.topic || "No session notes were added.")}</p></div>
                         <p class="attendance-confirmation-note">${escapeHtml(confirmNote)}</p><p class="attendance-confirmation-note">${escapeHtml(paymentNote)}</p><div class="student-session-actions">${b.payment_url ? `<a class="session-action" href="${escapeHtml(b.payment_url)}">Payment: ${escapeHtml(b.payment_status)}</a>` : ""}${joinBtn}${confirmBtn}${disputeBtn}${cancelBtn}</div>
+                        ${coordinationControls(b, proposals[b.id], now)}
                     </article>`;
                 }).join("");
                 filterSessions(document.querySelector(".session-tab.active")?.dataset.status || "upcoming", now);
@@ -239,7 +275,7 @@
                     : ended ? `<span class="attendance-confirmation-note">You confirmed - ${b.student_confirmed ? "both confirmed; 50 XP awarded" : "waiting for learner"}</span>`
                     : `<button class="session-action join-session" data-id="${b.id}">Join Session</button>`;
                 const dispute = ended && !b.attendance_disputed && !b.attendance_closed ? `<button class="session-action booking-action" data-id="${b.id}" data-action="dispute-attendance">Report disagreement</button>` : "";
-                return `<article class="mentor-upcoming-item"><div><strong>${escapeHtml(b.student)} · ${escapeHtml(b.topic)}</strong><span>${escapeHtml(b.formatted)}</span></div>${confirm}${dispute}</article>`;
+                return `<article class="mentor-upcoming-item"><div><strong>${escapeHtml(b.student)} · ${escapeHtml(b.topic)}</strong><span>${escapeHtml(b.formatted)}</span></div>${confirm}${dispute}${coordinationControls(b, proposals[b.id], now)}</article>`;
             }).join("") : '<p class="sessions-empty">No confirmed sessions scheduled.</p>';
             document.getElementById("mentorPendingCount")?.replaceChildren(String(requests.length));
             document.getElementById("mentorUpcomingCount")?.replaceChildren(String(upcoming.length));
@@ -248,7 +284,8 @@
     }
     document.addEventListener("click", async event => {
         const action = event.target.closest(".booking-action, .cancel-booking, .join-session");
-        if (!action) return;
+        if (!action || sessionRequestBusy) return;
+        sessionRequestBusy = true;
         action.disabled = true;
         action.setAttribute("aria-busy", "true");
         try {
@@ -262,6 +299,21 @@
             const kind = action.classList.contains("cancel-booking") ? "cancel" : action.dataset.action;
             let body;
             const headers = {"X-CSRFToken":token};
+            if (kind === "discord") {
+                const result = await fetch(`/api/sessions/${action.dataset.id}/discord-channel`, {method:"POST", headers}).then(r => r.json());
+                if (!result.ok) throw new Error(result.message);
+                const url = new URL(result.url);
+                if (url.origin !== "https://discord.com" || !/^\/channels\/\d+\/\d+$/.test(url.pathname)) throw new Error("Invalid room link.");
+                window.location.assign(url.href);
+                return;
+            }
+            const decisions = {"accept-time":"accept", "reject-time":"reject", withdraw:"withdraw"};
+            if (Object.hasOwn(decisions, kind)) {
+                await sendReschedule(action.dataset.id, {action:decisions[kind], proposal_id:Number(action.dataset.proposal)}, token);
+                window.alert(kind === "accept-time" ? "New appointment time confirmed." : "Current appointment time kept.");
+                await loadBookings();
+                return;
+            }
             if (kind === "dispute-attendance") {
                 const reason = window.prompt("Explain the attendance disagreement (5–1,000 characters). Your reason will be recorded for admin review.");
                 if (reason === null) return;
@@ -274,12 +326,44 @@
             loadBookings();
         } catch (error) { window.alert(error.message || "The requested action could not be completed."); }
         finally {
+            sessionRequestBusy = false;
             action.disabled = false;
             action.removeAttribute("aria-busy");
         }
     });
+    async function sendReschedule(id, payload, token) {
+        const response = await fetch(`/api/bookings/${id}/reschedule`, {
+            method:"POST", headers:{"X-CSRFToken":token, "Content-Type":"application/json"},
+            body:JSON.stringify(payload)
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.message || "Could not update the appointment time.");
+    }
+    document.addEventListener("submit", async event => {
+        const form = event.target.closest(".reschedule-form");
+        if (!form) return;
+        event.preventDefault();
+        if (sessionRequestBusy) return;
+        sessionRequestBusy = true;
+        const submit = form.querySelector('button[type="submit"]');
+        submit.disabled = true;
+        try {
+            const fields = new FormData(form);
+            const token = document.querySelector('meta[name="csrf-token"]')?.content;
+            await sendReschedule(form.dataset.id, {action:"propose", date:fields.get("date"), time:fields.get("time")}, token);
+            window.alert("Proposal sent. The appointment stays at its current time until the other participant accepts.");
+            await loadBookings();
+        } catch (error) {
+            window.alert(error.message);
+        } finally {
+            submit.disabled = false;
+            sessionRequestBusy = false;
+        }
+    });
     loadBookings();
-    window.setInterval(loadBookings, 10000);
+    window.setInterval(() => {
+        if (!sessionRequestBusy && !document.querySelector(".reschedule-controls[open]")) loadBookings();
+    }, 10000);
 
     // Availability button
     document.querySelectorAll(".mentor-availability-btn").forEach(btn => {

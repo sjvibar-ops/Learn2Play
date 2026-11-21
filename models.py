@@ -628,3 +628,45 @@ class DiscordAccount(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     discord_id = db.Column(db.String(32), nullable=False, unique=True)
     linked_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+class DiscordRoom(db.Model):
+    __tablename__ = "discord_rooms"
+
+    appointment_id = db.Column(db.Integer, db.ForeignKey("appointments.id"), primary_key=True)
+    guild_id = db.Column(db.String(32), nullable=False)
+    student_discord_id = db.Column(db.String(32), nullable=False)
+    provider_discord_id = db.Column(db.String(32), nullable=False)
+    marker = db.Column(db.String(64), nullable=False, unique=True)
+    channel_id = db.Column(db.String(32), nullable=True, unique=True)
+    state = db.Column(db.String(16), nullable=False)
+    __table_args__ = (db.CheckConstraint(
+        "state IN ('provisioning','ready','failed','removed')", name="ck_discord_room_state"),)
+
+
+class DiscordRoomEvent(db.Model):
+    __tablename__ = "discord_room_events"
+
+    id = db.Column(db.Integer, primary_key=True)
+    appointment_id = db.Column(db.Integer, db.ForeignKey("discord_rooms.appointment_id"), nullable=False)
+    actor_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    action = db.Column(db.String(24), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+
+class RescheduleProposal(db.Model):
+    __tablename__ = "reschedule_proposals"
+
+    id = db.Column(db.Integer, primary_key=True)
+    appointment_id = db.Column(db.Integer, db.ForeignKey("appointments.id"), nullable=False, index=True)
+    requested_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    decided_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    previous_start = db.Column(db.DateTime, nullable=False)
+    proposed_start = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    decided_at = db.Column(db.DateTime)
+    status = db.Column(db.String(16), nullable=False, default="pending")
+    __table_args__ = (
+        db.CheckConstraint("status IN ('pending','accepted','rejected','withdrawn')", name="ck_reschedule_status"),
+        db.Index("uq_pending_reschedule", "appointment_id", unique=True,
+                 sqlite_where=db.text("status = 'pending'"), postgresql_where=db.text("status = 'pending'")),
+    )

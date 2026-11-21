@@ -42,9 +42,11 @@ def lock_schedules(*participant_ids):
     READ COMMITTED ensures the overlap query sees bookings committed by a lock
     holder we waited for. Fail closed on unsupported PostgreSQL isolation rather
     than making decisions from a repeatable-read snapshot taken during login.
-    SQLite omits row locking and is supported for sequential functional tests.
+    SQLite serializes schedule changes with its database write lock.
     """
     connection = db.session.connection()
+    if connection.dialect.name == 'sqlite' and not connection.connection.driver_connection.in_transaction:
+        connection.exec_driver_sql('BEGIN IMMEDIATE')
     if connection.dialect.name == 'postgresql' and connection.get_isolation_level() != 'READ COMMITTED':
         raise ReservationConfigurationError('Booking reservations require READ COMMITTED isolation.')
     users = {}
