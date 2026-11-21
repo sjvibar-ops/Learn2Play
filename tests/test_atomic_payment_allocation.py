@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from threading import Barrier
 from uuid import uuid4
 from unittest.mock import MagicMock, patch
@@ -149,6 +150,44 @@ def migrated_postgres():
         yield owner, runtime, admin_ids, pre_cutover, historic
     finally:
         harness.tearDownClass()
+
+
+def test_development_catalog_sql_on_migrated_loopback_postgres(migrated_postgres):
+    from test_supabase_development_preflight import catalog, diagnostic
+
+    _, runtime, *_ = migrated_postgres
+    url = runtime.config["SQLALCHEMY_DATABASE_URI"]
+    assert "@127.0.0.1:" in url
+    args = SimpleNamespace(expected_host="127.0.0.1", expected_runtime_role="phase2_flask",
+                           receipt_bucket="payment-receipts")
+    reports = [diagnostic.section(application_schema={}), diagnostic.section(),
+               diagnostic.section(), diagnostic.section()]
+    schema = (*catalog.migration_graph(), *catalog.local_schema())
+    with psycopg.connect(url.replace("postgresql+psycopg:", "postgresql:", 1), autocommit=True,
+                         row_factory=psycopg.rows.dict_row) as connection:
+        # The fixture uses loopback trust and a test database name. Transaction
+        # enforcement, remaining identity checks, and all catalog SQL are real.
+        cursor_target = SimpleNamespace(pgconn=SimpleNamespace(ssl_in_use=True), execute=connection.execute)
+        verify = catalog.verify_identity
+
+        def verify_fixture_identity(identity, expected):
+            assert identity["database"] == "phase2_cutover"
+            verify(dict(identity, database="postgres"), expected)
+
+        with patch.object(catalog, "verify_identity", side_effect=verify_fixture_identity):
+            diagnostic.inspect_target(cursor_target, args, schema, *reports, psycopg.Error)
+        assert connection.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+    database, financial, metadata, access = reports
+    assert database["migration"]["status"] == "UNVERIFIED"  # Fixture role lacks version-table access.
+    assert len(database["application_schema"]) == 21
+    assert not any("uq_payments_verified_transfer" in finding or "uq_pending_reschedule" in finding
+                   for finding in database["unverified"])
+    assert financial["runtime_settings"]["default_isolation"] == "read committed"
+    assert financial["runtime_settings"]["update_sealed"] is True
+    assert all(function["present"] and function["result_matches"] and function["executable"]
+               for function in financial["function_signatures"])
+    assert diagnostic.summarize(metadata) == "NOT VERIFIED"
+    assert diagnostic.summarize(access) == "NOT VERIFIED"
 
 
 def journal_details(owner, payment_id):

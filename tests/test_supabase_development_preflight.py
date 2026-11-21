@@ -59,7 +59,7 @@ class DevelopmentPreflightTests(unittest.TestCase):
         connection = Mock()
         connection.pgconn.ssl_in_use = False
         with self.assertRaises(catalog.Blocked):
-            diagnostic.inspect_target(connection, self.args, (), {}, {}, RuntimeError)
+            diagnostic.inspect_target(connection, self.args, (), {}, {}, {}, {}, RuntimeError)
         connection.execute.assert_not_called()
 
     def test_read_only_failure_rolls_back_without_inspection(self):
@@ -67,7 +67,7 @@ class DevelopmentPreflightTests(unittest.TestCase):
         connection.pgconn.ssl_in_use = True
         connection.execute.return_value.fetchone.return_value = {"read_only": "off"}
         with patch.object(catalog, "inspect") as inspect, self.assertRaises(catalog.Blocked):
-            diagnostic.inspect_target(connection, self.args, (), {}, {}, RuntimeError)
+            diagnostic.inspect_target(connection, self.args, (), {}, {}, {}, {}, RuntimeError)
         inspect.assert_not_called()
         self.assertEqual(connection.execute.call_args_list, [
             call("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"), call(catalog.IDENTITY), call("ROLLBACK"),
@@ -85,13 +85,20 @@ class DevelopmentPreflightTests(unittest.TestCase):
         ]
         database = diagnostic.section(policies=[])
         storage = diagnostic.section()
+        financial = diagnostic.section()
+        access = diagnostic.section()
         with patch.object(catalog, "inspect", return_value=({}, {})), patch.object(
             catalog, "inspect_storage", side_effect=RuntimeError(DEMO_PASSWORD),
-        ):
-            diagnostic.inspect_target(connection, self.args, (), database, storage, RuntimeError)
+        ), patch.dict(diagnostic.inspect_target.__globals__, {
+            "check_definitions": Mock(), "check_trigger_definitions": Mock(),
+            "check_financial_runtime": Mock(),
+        }):
+            diagnostic.inspect_target(connection, self.args, (None,) * 5, database, financial, storage, access, RuntimeError)
         self.assertEqual(diagnostic.summarize(database), "PASS")
         self.assertEqual(diagnostic.summarize(storage), "NOT VERIFIED")
         self.assertNotIn(DEMO_PASSWORD, str(storage))
+        self.assertIsNone(access["objects_relation"])
+        self.assertEqual(diagnostic.summarize(access), "NOT VERIFIED")
         self.assertEqual(connection.execute.call_args, call("ROLLBACK"))
 
     def test_parser_and_cli_suppress_secret_in_unexpected_exception(self):
@@ -134,3 +141,88 @@ class DevelopmentPreflightTests(unittest.TestCase):
         catalog.inspect_storage(connection, self.args.receipt_bucket, relations, columns, storage)
         self.assertEqual(diagnostic.summarize(storage), "BLOCKER")
         self.assertEqual(storage["problems"], ["Storage bucket missing or privacy differs: payment-receipts."])
+        connection.execute.return_value.fetchall.return_value.append({
+            "name": "payment-receipts", "public": False, "file_size_limit": 5 * 1024**2,
+            "allowed_mime_types": ["image/png", "image/jpeg"],
+        })
+        storage = diagnostic.section()
+        catalog.inspect_storage(connection, self.args.receipt_bucket, relations, columns, storage)
+        self.assertEqual(diagnostic.summarize(storage), "PASS")
+
+    def test_partial_predicates_and_check_constraints(self):
+        for expected, matching, changed in (
+            ("status = 'VERIFIED'", "((status)::text = 'VERIFIED'::text)", "status = 'PENDING'"),
+            ("status = 'pending'", "((status)::text = 'pending'::text)", "status = 'accepted'"),
+            ("points > 0", "(points > 0)", "points >= 0"),
+        ):
+            with self.subTest(expected=expected):
+                report = diagnostic.section()
+                diagnostic.compare_expression(expected, matching, "fixture", report)
+                self.assertEqual(diagnostic.summarize(report), "PASS")
+                diagnostic.compare_expression(expected, changed, "fixture", report)
+                self.assertEqual(diagnostic.summarize(report), "NOT VERIFIED")
+
+    def test_changed_trigger_condition_and_columns(self):
+        connection = Mock()
+        trigger = {"table_name": "ledger_transactions", "name": "phase2_check_allocation"}
+        prefix = "CREATE TRIGGER phase2_check_allocation AFTER UPDATE OF {} ON public.ledger_transactions"
+        suffix = " FOR EACH ROW WHEN ({}) EXECUTE FUNCTION public.phase2_check_allocation()"
+        for column, expression, status in (
+            ("sealed", "NEW.sealed AND NEW.kind = 'allocation'", "PASS"),
+            ("sealed", "NEW.sealed OR NEW.kind = 'allocation'", "NOT VERIFIED"),
+            ("kind", "NEW.sealed AND NEW.kind = 'allocation'", "BLOCKER"),
+        ):
+            with self.subTest(column=column, expression=expression):
+                connection.execute.return_value.fetchall.return_value = [
+                    dict(trigger, definition=prefix.format(column) + suffix.format(expression))
+                ]
+                report = diagnostic.section()
+                diagnostic.check_trigger_definitions(connection, report)
+                self.assertEqual(diagnostic.summarize(report), status)
+
+    def test_financial_runtime_settings_and_restrictive_rls(self):
+        runtime = dict(replication_role="origin", default_isolation="read committed",
+                       schema_usage=True, update_sealed=True, rls_active=True)
+        policies = [dict(command="*", permissive=True, using_expression="true", check_expression="true")]
+        for changes, status in (
+            ({}, "PASS"), ({"update_sealed": False}, "BLOCKER"),
+            ({"replication_role": "replica"}, "BLOCKER"), ({"default_isolation": "repeatable read"}, "BLOCKER"),
+        ):
+            with self.subTest(changes=changes):
+                report = diagnostic.section()
+                diagnostic.check_financial_runtime({**runtime, **changes}, policies, report)
+                self.assertEqual(diagnostic.summarize(report), status)
+        policies.append(dict(command="w", permissive=False, using_expression="false", check_expression=None))
+        report = diagnostic.section()
+        diagnostic.check_financial_runtime(runtime, policies, report)
+        self.assertEqual(diagnostic.summarize(report), "NOT VERIFIED")
+
+    def test_matching_buckets_cannot_override_unverified_access(self):
+        metadata = diagnostic.section()
+        access = diagnostic.section()
+        access["unverified"].append("Storage API not exercised")
+        self.assertEqual(diagnostic.aggregate(diagnostic.section(), metadata, access), "NOT VERIFIED")
+        self.assertEqual(metadata["status"], "PASS")
+        self.assertEqual(access["status"], "NOT VERIFIED")
+        financial = diagnostic.section()
+        financial["problems"].append("fixture blocker")
+        self.assertEqual(diagnostic.aggregate(financial, metadata, access), "BLOCKER")
+
+    def test_financial_query_error_is_redacted_and_rolls_back(self):
+        connection = Mock()
+        connection.pgconn.ssl_in_use = True
+        connection.execute.return_value.fetchone.return_value = {
+            "read_only": "on", "database": "postgres", "schema": "public",
+            "role": "fixture_role", "session_role": "fixture_role",
+        }
+        connection.execute.return_value.fetchall.side_effect = RuntimeError(DEMO_PASSWORD)
+        database, financial, metadata, access = (diagnostic.section() for _ in range(4))
+        with patch.object(catalog, "inspect", return_value=({}, {})), patch.dict(
+            diagnostic.inspect_target.__globals__, {"check_definitions": Mock()},
+        ):
+            diagnostic.inspect_target(connection, self.args, (None,) * 5,
+                                      database, financial, metadata, access, RuntimeError)
+        self.assertEqual(diagnostic.summarize(financial), "NOT VERIFIED")
+        self.assertEqual(diagnostic.summarize(metadata), "NOT VERIFIED")
+        self.assertNotIn(DEMO_PASSWORD, str(financial))
+        self.assertEqual(connection.execute.call_args, call("ROLLBACK"))
