@@ -1982,12 +1982,15 @@ def meeting_page(booking_id):
         participant_token = create_jaas_participant_token(appt, current_user)
     except JaasConfigurationError:
         return error("Video meetings are temporarily unavailable. Please contact support.", 503)
-    return render_template(
+    response = current_app.make_response(render_template(
         "meeting.html",
         jaas_app_id=current_app.config["JAAS_APP_ID"],
         meeting_room=appt.meeting_room,
         participant_token=participant_token,
-    )
+    ))
+    response.headers["Cache-Control"] = "no-store, private"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
 
 
 # ---------- Frontend View Routes ----------

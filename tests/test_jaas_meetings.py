@@ -130,6 +130,14 @@ class JaasMeetingTests(unittest.TestCase):
         self.assertEqual(claims["context"]["user"]["moderator"], "false")
         self.assertEqual(claims["room"], self.appointment.meeting_room)
 
+    def test_token_bearing_meeting_page_is_private_and_not_cached(self):
+        self._login_as(self.student)
+        response = self.client.get(f"/sessions/{self.appointment.id}/meeting")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.cache_control.no_store)
+        self.assertTrue(response.cache_control.private)
+        self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
+
     def test_unrelated_user_is_rejected(self):
         self._login_as(self.unrelated)
         self.assertEqual(self.client.get(f"/api/sessions/{self.appointment.id}/join").status_code, 404)
