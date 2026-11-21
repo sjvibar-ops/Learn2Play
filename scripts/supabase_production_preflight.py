@@ -347,8 +347,8 @@ def compare_table(table, actual, columns, constraints, indexes, policies, dialec
             report["problems"].append(f"{name}: no applicable permissive RLS policy for one or more runtime operations.")
 
 
-def inspect(connection, args, identity, head, revisions, tables, dialect, access, report):
-    report["identity"] = dict(identity, project_reference=PRODUCTION, verified_tls_endpoint=args.expected_host)
+def inspect(connection, args, identity, head, revisions, tables, dialect, access, report, *, project_reference):
+    report["identity"] = dict(identity, project_reference=project_reference, verified_tls_endpoint=args.expected_host)
     if identity["superuser"] or identity["bypass_rls"]:
         report["problems"].append("Runtime role can bypass RLS.")
     names = sorted(tables)
@@ -376,7 +376,7 @@ def inspect(connection, args, identity, head, revisions, tables, dialect, access
     report["migration"] = dict(status=state, expected_head=head, observed_count_up_to_limit=len(revision_rows),
                                observed=[r if r in revisions else "<unknown revision>" for r in revision_rows])
     if state not in ("CURRENT", "UNVERIFIED"):
-        report["problems"].append("Production revision requires a reviewed reconciliation decision. Do not stamp.")
+        report["problems"].append("Installed revision requires a reviewed reconciliation decision. Do not stamp.")
     report["unexpected_public_relations"] = sorted(name for schema, name in relations
                                                     if schema == "public" and name not in tables and name != "alembic_version")
     constraints, indexes = table_rows(connection, CONSTRAINTS, (names,)), table_rows(connection, INDEXES, (names,))
@@ -406,7 +406,7 @@ def inspect(connection, args, identity, head, revisions, tables, dialect, access
     report["functions"] = connection.execute(FUNCTION_SQL).fetchall()
     for name in sorted(FUNCTIONS - {r["name"] for r in report["functions"]}):
         report["problems"].append(f"Expected function missing: {name}.")
-    inspect_storage(connection, args.receipt_bucket, relations, columns, report)
+    return relations, columns
 
 
 def inspect_storage(connection, receipt_bucket, relations, columns, report):
@@ -483,7 +483,11 @@ def main():
                 identity = connection.execute(IDENTITY).fetchone()
                 verify_identity(identity, args)
                 stage = "catalog or approved metadata"
-                inspect(connection, args, identity, head, revisions, tables, dialect, access, report)
+                relations, columns = inspect(
+                    connection, args, identity, head, revisions, tables, dialect, access, report,
+                    project_reference=PRODUCTION,
+                )
+                inspect_storage(connection, args.receipt_bucket, relations, columns, report)
             except BaseException:
                 try:
                     connection.execute("ROLLBACK")
