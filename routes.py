@@ -1,6 +1,7 @@
 import os
 import re
 import secrets
+import sqlite3
 import urllib.parse
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
@@ -30,7 +31,7 @@ from flask_login import (
 )
 from flask_wtf.csrf import generate_csrf
 import jwt
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from supabase import create_client
 from werkzeug.utils import secure_filename
 
@@ -575,7 +576,9 @@ def register():
 
 @main.route("/api/auth/login", methods=["POST"])
 def login():
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return error("Please enter your email and password.")
     email = data.get("email", "")
     password = data.get("password", "")
     remember = data.get("remember", False)
@@ -584,7 +587,18 @@ def login():
         return error("Please enter your email and password.")
 
     email = email.strip().lower()
-    user = User.query.filter_by(email=email).first()
+    try:
+        user = User.query.filter_by(email=email).first()
+    except OperationalError as exc:
+        db.session.rollback()
+        if (
+            not current_app.config["SESSION_COOKIE_SECURE"]
+            and isinstance(exc.orig, sqlite3.OperationalError)
+            and str(exc.orig).startswith(("no such column: users.", "no such table: users"))
+        ):
+            current_app.logger.error("Local SQLite user schema is incompatible with this Learn2Play version.")
+            return error("The local database needs a schema upgrade before you can sign in. See the local database instructions in README.md.", 503)
+        raise
 
     if not user or not user.check_password(password):
         return error("Incorrect email or password.", 401)

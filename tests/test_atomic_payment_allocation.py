@@ -23,7 +23,7 @@ from test_payments import PNG
 
 MIGRATIONS = str(Path(__file__).resolve().parents[1] / "migrations")
 PARENT = "f78b2c01d4e6"
-HEAD = "c83d9f2a71e4"
+HEAD = "db71a6e5c902"
 
 
 def isolated_app(database, port, login, *, enabled=False):

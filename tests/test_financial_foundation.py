@@ -50,7 +50,8 @@ def test_unsupported_currency_and_migration_head():
     with pytest.raises(ValueError):
         allocate_payment(Decimal("1.00"), "USD")
     graph = ScriptDirectory(str(Path(__file__).resolve().parents[1] / "migrations"))
-    assert graph.get_heads() == ["c83d9f2a71e4"]
+    assert graph.get_heads() == ["db71a6e5c902"]
+    assert graph.get_revision("db71a6e5c902").down_revision == "c83d9f2a71e4"
     assert graph.get_revision("c83d9f2a71e4").down_revision == REMEDIATION.revision
     assert graph.get_revision(REMEDIATION.revision).down_revision == MIGRATION.revision
     assert graph.get_revision(MIGRATION.revision).down_revision == "a6d2f9c83b10"

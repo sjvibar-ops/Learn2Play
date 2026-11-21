@@ -15,6 +15,28 @@ Without `DATABASE_URL`, the app uses `learn2play.db` in the project root.
 `python app.py` reads `DATABASE_URL` from the process environment and does
 not load `.env.local`. Application startup does not apply migrations.
 
+### Upgrade an existing local SQLite database
+
+Flask CLI can load `.env` and `.flaskenv` when python-dotenv is installed.
+Confirm the CLI is pointed at your intended local SQLite file before running
+migration commands. Stop the development server and make a separate, verified
+backup using SQLite's backup API so the backup includes any committed WAL data.
+
+From the project root, check the recorded revision with
+`./.venv/Scripts/python.exe -m flask --app app db current`.
+Revision `d2b7a4e9310c` adds `users.leaderboard_opt_in` with an opt-out default.
+If the local database is at `9e45f7e7aa32`, apply the full pending chain:
+
+```powershell
+./.venv/Scripts/python.exe -m flask --app app db upgrade db71a6e5c902
+./.venv/Scripts/python.exe -m flask --app app db current
+```
+
+A populated database without a recorded revision needs a schema comparison
+before upgrade. Preserve the database and its accounts while diagnosing it.
+The final SQLite revision restores the transfer indexes lost during the payment
+history migration. It stops if existing verified payments collide.
+
 ## Run tests locally
 
 From PowerShell, run `.\.venv\Scripts\python.exe -B -m pytest -p no:cacheprovider tests`
