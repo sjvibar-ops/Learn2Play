@@ -10,6 +10,10 @@
       const response = await fetch(url, {method:"POST", credentials:"same-origin", headers, body});
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.message || "Request failed.");
+      if (result.already_approved) {
+        feedback.textContent = "This receipt revision was already approved. Reload to see the saved decision.";
+        return;
+      }
       window.location.reload();
     } catch (error) { feedback.textContent = error.message; buttons.forEach((b, i) => b.disabled = disabledBefore[i]); }
   }
@@ -26,7 +30,9 @@
     if (action === "approve" && !form.elements.confirmed.checked) {
       feedback.textContent = "Check the receiving account records before approving."; return;
     }
-    send(form, `/api/admin/payments/${form.dataset.id}/${action}`, JSON.stringify({reason:form.elements.reason.value, confirmed:form.elements.confirmed.checked}), true);
+    const review = {reason: form.elements.reason.value, confirmed: form.elements.confirmed.checked};
+    if (action === "approve") review.expected_revision = Number(form.dataset.revision);
+    send(form, `/api/admin/payments/${form.dataset.id}/${action}`, JSON.stringify(review), true);
   }));
   document.querySelectorAll(".payment-reconciliation-form").forEach(form => form.addEventListener("submit", event => {
     event.preventDefault();

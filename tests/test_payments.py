@@ -14,7 +14,8 @@ PNG = bytes.fromhex('89504e470d0a1a0a0000000d4948445200000001000000010804000000b
 
 class PaymentTests(unittest.TestCase):
     def setUp(self):
-        self.app = create_app(dict(TESTING=True, WTF_CSRF_ENABLED=False, SQLALCHEMY_DATABASE_URI='sqlite://', SQLALCHEMY_ENGINE_OPTIONS={}))
+        self.app = create_app(dict(TESTING=True, WTF_CSRF_ENABLED=False, SQLALCHEMY_DATABASE_URI='sqlite://', SQLALCHEMY_ENGINE_OPTIONS={},
+                                   PAYMENT_LEDGER_APPROVAL_ENABLED=True))
         self.context = self.app.app_context()
         self.context.push()
         db.create_all()
@@ -34,6 +35,12 @@ class PaymentTests(unittest.TestCase):
         self.storage = MagicMock()
         self.mock = patch('payments.receipts_bucket', return_value=self.storage)
         self.mock.start()
+        # SQLite regression tests exercise the existing receipt/review paths.
+        # Real posting and activation are covered in the migrated PostgreSQL suite.
+        for name, value in (("approval_ready", True), ("approval_complete", False), ("post_initial_allocation", None)):
+            substitute = patch(f"payments.{name}", return_value=value)
+            substitute.start()
+            self.addCleanup(substitute.stop)
         self.login(self.student)
 
     def tearDown(self):
@@ -41,6 +48,7 @@ class PaymentTests(unittest.TestCase):
         db.session.remove()
         db.drop_all()
         self.context.pop()
+        self.doCleanups()
 
     def login(self, user):
         from flask import g
@@ -54,7 +62,8 @@ class PaymentTests(unittest.TestCase):
 
     def review(self, action='approve', **data):
         self.login(self.admin)
-        return self.client.post(f'/api/admin/payments/{self.payment.id}/{action}', json=dict(confirmed=True, **data))
+        payload = {"confirmed": True, "expected_revision": self.payment.submission_revision} | data
+        return self.client.post(f'/api/admin/payments/{self.payment.id}/{action}', json=payload)
 
     def test_owner_views_and_history(self):
         self.assertEqual(self.client.get(f'/payments/bookings/{self.booking.id}').status_code, 200)

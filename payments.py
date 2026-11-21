@@ -15,11 +15,15 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 if __package__:
+    from .admin_audit import AuditAction, AuditReason, AuditTarget, record_admin_event
+    from .financial_ledger import approval_complete, approval_ready, initial_allocation_terms, post_initial_allocation
     from .reconciliation import TRANSITIONS, STATES, ReconciliationError, decide
     from .extensions import db
     from .models import Appointment, Payment, PaymentEvent, utcnow
     from .routes import admin_required, error, format_dt_pht
 else:
+    from admin_audit import AuditAction, AuditReason, AuditTarget, record_admin_event
+    from financial_ledger import approval_complete, approval_ready, initial_allocation_terms, post_initial_allocation
     from reconciliation import TRANSITIONS, STATES, ReconciliationError, decide
     from extensions import db
     from models import Appointment, Payment, PaymentEvent, utcnow
@@ -371,11 +375,13 @@ def admin_payments():
 def review(payment_id, action):
     if action not in ("approve", "reject"):
         return error("Unsupported payment action.")
-    payment = Payment.query.filter_by(id=payment_id).with_for_update().first()
+    payment = Payment.query.filter_by(id=payment_id).populate_existing().with_for_update().first()
     if not payment:
         return error("Payment not found.", 404)
-    appointment = Appointment.query.filter_by(id=payment.appointment_id).with_for_update().one()
-    if payment.status != "SUBMITTED" or appointment.status not in ACTIVE:
+    appointment = Appointment.query.filter_by(id=payment.appointment_id).populate_existing().with_for_update().one()
+    if (payment.status != "SUBMITTED" or appointment.status not in ACTIVE) and not (
+        action == "approve" and payment.status == "VERIFIED"
+    ):
         return error("Only submitted payments for active bookings can be reviewed.", 409)
     data = request.get_json(silent=True) or {}
     if not isinstance(data, dict):
@@ -388,29 +394,68 @@ def review(payment_id, action):
     reason = reason.strip()
     if action == "reject" and not 5 <= len(reason) <= 500:
         return error("Enter a meaningful rejection reason of 5–500 characters.")
+    revision = data.get("expected_revision")
     if action == "approve":
-        if payment.method not in METHODS or not payment.transaction_reference or not payment.transaction_reference.strip():
-            return error("Valid payment method and transaction reference are required before verification.", 409)
-        if transfer_claims(payment, blocking_only=True):
-            return error("Conflicting transfer claim: another submitted or verified payment uses this method and transaction reference. Review all matching claims and reject any incorrect claim before approving. An already verified transfer cannot be allocated again.", 409)
-    # Legacy snapshot and decision must roll back together with the projection.
+        if type(revision) is not int or not 0 <= revision <= 2**31 - 1:
+            return error("Provide the receipt revision you reviewed.")
+        if revision != payment.submission_revision:
+            return error("The receipt revision changed. Reload and review the current proof.", 409)
     try:
+        if action == "approve" and not approval_ready():
+            return error("Financial payment approvals are currently unavailable.", 503)
+        if payment.status == "VERIFIED":
+            if approval_complete(payment_id, revision):
+                return jsonify(ok=True, already_approved=True, payment=details(payment))
+            return error("This payment was already verified and requires review before any financial change.", 409)
+        if action == "approve" and PaymentEvent.query.filter_by(
+            payment_id=payment_id, new_status="VERIFIED",
+        ).first() is not None:
+            return error("Earlier verification history requires manual review.", 409)
+        if action == "approve":
+            if payment.method not in METHODS or not payment.transaction_reference or not payment.transaction_reference.strip():
+                return error("Valid payment method and transaction reference are required before verification.", 409)
+            if transfer_claims(payment, blocking_only=True):
+                return error("Conflicting transfer claim: another submitted or verified payment uses this method and transaction reference. Review all matching claims and reject any incorrect claim before approving. An already verified transfer cannot be allocated again.", 409)
+            terms = initial_allocation_terms(payment, appointment)
         preserve_legacy_snapshot(payment, current_user.id)
-    except SQLAlchemyError:
-        db.session.rollback()
-        return error("Review could not be saved. Please retry.", 503)
-    previous_status = payment.status
-    payment.status = "VERIFIED" if action == "approve" else "REJECTED"
-    payment.reviewed_by = current_user.id
-    payment.reviewed_at = utcnow()
-    payment.rejection_reason = reason if action == "reject" else None
-    record_event(payment, payment.status, previous_status, current_user.id)
-    try:
+        previous_status = payment.status
+        payment.status = "VERIFIED" if action == "approve" else "REJECTED"
+        payment.reviewed_by = current_user.id
+        payment.reviewed_at = utcnow()
+        payment.rejection_reason = reason if action == "reject" else None
+        verification = record_event(payment, payment.status, previous_status, current_user.id)
+        if action == "approve":
+            db.session.flush()
+            record_admin_event(
+                actor=current_user, action=AuditAction.PAYMENT_APPROVED, target_type=AuditTarget.PAYMENT,
+                target_id=payment_id, reason=AuditReason.RECEIVING_ACCOUNT_CHECKED,
+                before={"payment_status": previous_status},
+                after={"payment_status": "VERIFIED", "currency": appointment.currency,
+                       "amount_centavos": sum(terms)},
+                verification_event_id=verification.id,
+            )
+            db.session.flush()
+            post_initial_allocation(payment, appointment, verification, terms)
         db.session.commit()
+    except ValueError:
+        db.session.rollback()
+        return error("Payment evidence or financial details require manual review.", 409)
     except IntegrityError as exc:
         db.session.rollback()
         if action == "approve" and verified_transfer_conflict(exc):
             return error("This transfer was already verified for another payment. Refresh the queue and reconcile the conflicting claims.", 409)
+        constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+        if action == "approve" and constraint in {
+            "uq_ledger_initial_allocation", "uq_ledger_payment_event_kind", "uq_admin_audit_verification_event",
+        }:
+            try:
+                if approval_complete(payment_id, revision):
+                    saved = db.session.get(Payment, payment_id)
+                    return jsonify(ok=True, already_approved=True, payment=details(saved))
+            except SQLAlchemyError:
+                db.session.rollback()
+                return error("Review could not be saved. Please retry.", 503)
+            return error("Existing financial records require manual review.", 409)
         return error("Review could not be saved. Please retry.", 503)
     except SQLAlchemyError:
         db.session.rollback()

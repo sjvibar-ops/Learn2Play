@@ -309,7 +309,7 @@ def test_csrf_and_admin_endpoint_validation(f):
 def test_reconciliation_migration_is_conservative_single_head_and_not_executed():
     root = Path(__file__).resolve().parents[1]
     graph = ScriptDirectory(str(root/'migrations'))
-    assert graph.get_heads() == ['a6d2f9c83b10']
+    assert graph.get_heads() == ['c83d9f2a71e4']
     assert graph.get_revision('f4c2a8d91e70').down_revision == 'e9b7c2d41a60'
     source = (root/'migrations/versions/f4c2a8d91e70_payment_reconciliation.py').read_text(encoding='utf-8')
     tree = ast.parse(source)

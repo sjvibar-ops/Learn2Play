@@ -68,6 +68,7 @@ class Config:
     PAYMENT_RECEIPTS_BUCKET = os.environ.get("PAYMENT_RECEIPTS_BUCKET", "payment-receipts")
     PAYMENT_QR_URL = os.environ.get("PAYMENT_QR_URL", "")
     PAYMENT_DEMO = os.environ.get("PAYMENT_DEMO", "true").lower() != "false"
+    PAYMENT_LEDGER_APPROVAL_ENABLED = os.environ.get("PAYMENT_LEDGER_APPROVAL_ENABLED") == "true"
     PAYMENT_INSTRUCTIONS = os.environ.get("PAYMENT_INSTRUCTIONS", "Use the configured QR in your supported bank or e-wallet app. Enter the exact amount and keep the transaction reference.")
 
     # Database

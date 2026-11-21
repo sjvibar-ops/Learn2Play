@@ -356,6 +356,9 @@ class MentorUnavailableDate(db.Model):
 class Payment(db.Model):
     """One immutable price snapshot per appointment; verification is manual."""
     __tablename__ = "payments"
+    # The marker is written by PostgreSQL. Keep normal payment reads and
+    # inserts compatible with the pre-activation schema during deployment.
+    __mapper_args__ = {"eager_defaults": False}
     id = db.Column(db.Integer, primary_key=True)
     appointment_id = db.Column(db.Integer, db.ForeignKey("appointments.id"), nullable=False, unique=True)
     student_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
@@ -371,6 +374,7 @@ class Payment(db.Model):
     reconciliation_updated_at = db.Column(db.DateTime)
     reconciliation_updated_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     submission_revision = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    ledger_verification_xid = db.deferred(db.Column(db.String(20), server_default=db.FetchedValue()))
     reviewed_by = db.Column(db.Integer, db.ForeignKey("users.id"))
     reviewed_at = db.Column(db.DateTime)
     submitted_at = db.Column(db.DateTime)
@@ -483,3 +487,136 @@ class AttendanceEvent(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     appointment = db.relationship("Appointment", backref="attendance_events")
     actor = db.relationship("User", foreign_keys=[actor_id])
+
+
+PLATFORM_LEDGER_ACCOUNTS = ("payment_clearing", "platform_commission")
+PROVIDER_LEDGER_ACCOUNTS = (
+    "provider_pending", "provider_available", "provider_held", "provider_settlement",
+)
+LEDGER_TRANSACTION_TYPES = (
+    "allocation", "release", "hold", "refund", "adjustment", "reversal", "settlement",
+)
+
+
+class AdminAuditEvent(db.Model):
+    """Structured administrative history. Callers own authorization and commit."""
+
+    __tablename__ = "admin_audit_events"
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, "sqlite"), primary_key=True)
+    actor_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    action = db.Column(db.String(40), nullable=False)
+    target_type = db.Column(db.String(40), nullable=False)
+    target_id = db.Column(db.BigInteger, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    reason = db.Column(db.String(40))
+    before = db.Column(db.JSON(none_as_null=True))
+    after = db.Column(db.JSON(none_as_null=True))
+    correlation_id = db.Column(db.Uuid)
+    related_event_id = db.Column(db.BigInteger, db.ForeignKey("admin_audit_events.id", ondelete="RESTRICT"))
+    verification_event_id = db.Column(
+        db.Integer, db.ForeignKey("payment_events.id", ondelete="RESTRICT"),
+    )
+
+    __table_args__ = (
+        db.CheckConstraint("length(trim(action)) > 0 AND length(trim(target_type)) > 0 AND target_id > 0",
+                           name="ck_admin_audit_target"),
+        db.Index("ix_admin_audit_target", "target_type", "target_id", "id"),
+        db.Index("ix_admin_audit_actor", "actor_id", "id"),
+        db.Index("ix_admin_audit_correlation", "correlation_id"),
+        db.UniqueConstraint("verification_event_id", name="uq_admin_audit_verification_event"),
+    )
+
+
+class LedgerAccount(db.Model):
+    __tablename__ = "ledger_accounts"
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, "sqlite"), primary_key=True)
+    kind = db.Column(db.String(30), nullable=False)
+    currency = db.Column(db.String(3), nullable=False)
+    provider_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="RESTRICT"))
+
+    __table_args__ = (
+        db.CheckConstraint("currency = 'PHP'", name="ck_ledger_account_currency"),
+        db.CheckConstraint(
+            f"(kind IN {PLATFORM_LEDGER_ACCOUNTS!r} AND provider_id IS NULL) OR "
+            f"(kind IN {PROVIDER_LEDGER_ACCOUNTS!r} AND provider_id IS NOT NULL)",
+            name="ck_ledger_account_owner",
+        ),
+        db.UniqueConstraint("id", "currency", name="uq_ledger_account_currency"),
+        db.UniqueConstraint("provider_id", "kind", "currency", name="uq_ledger_provider_account"),
+        db.Index("uq_ledger_platform_account", "kind", "currency", unique=True,
+                 postgresql_where=db.text("provider_id IS NULL"), sqlite_where=db.text("provider_id IS NULL")),
+    )
+
+
+class LedgerTransaction(db.Model):
+    __tablename__ = "ledger_transactions"
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, "sqlite"), primary_key=True)
+    kind = db.Column(db.String(30), nullable=False)
+    currency = db.Column(db.String(3), nullable=False)
+    payment_id = db.Column(db.Integer, db.ForeignKey("payments.id", ondelete="RESTRICT"))
+    appointment_id = db.Column(db.Integer, db.ForeignKey("appointments.id", ondelete="RESTRICT"))
+    provider_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="RESTRICT"))
+    payment_event_id = db.Column(db.Integer, db.ForeignKey("payment_events.id", ondelete="RESTRICT"))
+    admin_audit_id = db.Column(db.BigInteger, db.ForeignKey("admin_audit_events.id", ondelete="RESTRICT"))
+    actor_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="RESTRICT"))
+    system_actor = db.Column(db.String(40))
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    reason = db.Column(db.String(500), nullable=False)
+    original_transaction_id = db.Column(db.BigInteger, db.ForeignKey("ledger_transactions.id", ondelete="RESTRICT"))
+    # PostgreSQL only permits this construction state inside the posting transaction.
+    sealed = db.Column(db.Boolean, nullable=False, server_default=db.false())
+
+    __table_args__ = (
+        db.CheckConstraint("currency = 'PHP'", name="ck_ledger_transaction_currency"),
+        db.CheckConstraint(f"kind IN {LEDGER_TRANSACTION_TYPES!r}", name="ck_ledger_transaction_type"),
+        db.CheckConstraint("(payment_event_id IS NULL) <> (admin_audit_id IS NULL)", name="ck_ledger_source"),
+        db.CheckConstraint("(actor_id IS NOT NULL AND system_actor IS NULL) OR "
+                           "(actor_id IS NULL AND system_actor IS NOT NULL AND length(trim(system_actor)) > 0)",
+                           name="ck_ledger_actor"),
+        db.CheckConstraint("length(trim(reason)) > 0", name="ck_ledger_reason"),
+        db.CheckConstraint("kind <> 'allocation' OR "
+                           "(payment_id IS NOT NULL AND appointment_id IS NOT NULL AND provider_id IS NOT NULL "
+                           "AND payment_event_id IS NOT NULL AND original_transaction_id IS NULL)",
+                           name="ck_ledger_allocation_source"),
+        db.CheckConstraint("kind NOT IN ('refund', 'adjustment', 'reversal') OR "
+                           "(admin_audit_id IS NOT NULL AND original_transaction_id IS NOT NULL)",
+                           name="ck_ledger_compensation_source"),
+        db.UniqueConstraint("id", "currency", name="uq_ledger_transaction_currency"),
+        db.UniqueConstraint("kind", "payment_event_id", name="uq_ledger_payment_event_kind"),
+        db.UniqueConstraint("admin_audit_id", name="uq_ledger_admin_decision"),
+        db.Index("uq_ledger_initial_allocation", "payment_id", unique=True,
+                 postgresql_where=db.text("kind = 'allocation'"), sqlite_where=db.text("kind = 'allocation'")),
+        db.Index("ix_ledger_payment", "payment_id", "id"),
+        db.Index("ix_ledger_provider", "provider_id", "id"),
+        db.Index("ix_ledger_original", "original_transaction_id"),
+    )
+
+
+class LedgerLine(db.Model):
+    """Signed centavos. Positive is a debit, negative is a credit."""
+
+    __tablename__ = "ledger_lines"
+
+    transaction_id = db.Column(db.BigInteger, primary_key=True)
+    ordinal = db.Column(db.Integer, primary_key=True)
+    account_id = db.Column(db.BigInteger, nullable=False)
+    currency = db.Column(db.String(3), nullable=False)
+    centavos = db.Column(db.BigInteger, nullable=False)
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(["transaction_id", "currency"], ["ledger_transactions.id", "ledger_transactions.currency"],
+                                ondelete="RESTRICT", name="fk_ledger_line_transaction_currency"),
+        db.ForeignKeyConstraint(["account_id", "currency"], ["ledger_accounts.id", "ledger_accounts.currency"],
+                                ondelete="RESTRICT", name="fk_ledger_line_account_currency"),
+        db.CheckConstraint("ordinal > 0 AND centavos <> 0", name="ck_ledger_line_values"),
+        db.Index("ix_ledger_line_account", "account_id", "transaction_id"),
+    )
+
+
+@event.listens_for(AdminAuditEvent, "before_update")
+@event.listens_for(AdminAuditEvent, "before_delete")
+def immutable_admin_audit_event(mapper, connection, target):
+    raise ValueError("Administrator audit events are append-only.")

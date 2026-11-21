@@ -1,4 +1,5 @@
 from flask import Flask, request
+from sqlalchemy import event
 from werkzeug.exceptions import RequestEntityTooLarge
 
 if __package__:
@@ -9,6 +10,17 @@ else:
     from config import Config
     from errors import register_error_handlers
     from extensions import csrf, db, login_manager, migrate
+
+
+def _enable_sqlite_foreign_keys(connection, _record):
+    cursor = connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys = ON")
+        cursor.execute("PRAGMA foreign_keys")
+        if cursor.fetchone() != (1,):
+            raise RuntimeError("SQLite foreign key enforcement is required")
+    finally:
+        cursor.close()
 
 
 def create_app(config_overrides=None):
@@ -33,6 +45,10 @@ def create_app(config_overrides=None):
 
     # Initialize extensions
     db.init_app(app)
+    with app.app_context():
+        for engine in db.engines.values():
+            if engine.dialect.name == "sqlite":
+                event.listen(engine, "connect", _enable_sqlite_foreign_keys)
     migrate.init_app(app, db)
     login_manager.init_app(app)
     csrf.init_app(app)

@@ -1369,9 +1369,9 @@ class SchemaAndMigrationTests(unittest.TestCase):
                             values[target.id] = ast.literal_eval(node.value)
             revisions[values["revision"]] = values["down_revision"]
         parents = {p for value in revisions.values() for p in (value if isinstance(value, tuple) else (value,)) if p}
-        self.assertEqual(set(revisions) - parents, {"a6d2f9c83b10"})
+        self.assertEqual(set(revisions) - parents, {"c83d9f2a71e4"})
         self.assertEqual(revisions["e6a1c9d84b20"], ("c1a82b7d43ef", "d2b7a4e9310c"))
-        self.assertEqual(len(revisions), 13)
+        self.assertEqual(len(revisions), 16)
 
     def test_role_application_unique_constraint_is_intact(self):
         uniques = [

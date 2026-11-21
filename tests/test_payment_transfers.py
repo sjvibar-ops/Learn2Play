@@ -49,7 +49,9 @@ def submit_claim(fixture, reference, method='GCash', student=None):
 
 def decide(fixture, payment, action='approve', reason='Incorrect transfer claim confirmed by admin'):
     fixture.login(fixture.admin)
-    return fixture.client.post(f'/api/admin/payments/{payment.id}/{action}',json={'confirmed':True,'reason':reason})
+    return fixture.client.post(f'/api/admin/payments/{payment.id}/{action}',json={
+        'confirmed':True,'reason':reason,'expected_revision':payment.submission_revision,
+    })
 
 
 def test_duplicate_submissions_still_work_and_all_unresolved_claims_block_review(payment_fixture):

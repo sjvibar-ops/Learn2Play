@@ -38,7 +38,8 @@ class PostgresAttendanceConcurrencyTests(unittest.TestCase):
         cls.server=None
         cls.log=None
         try:
-            result=subprocess.run([str(cls.bin/'initdb'),'-D',str(cls.cluster),'-U','l2_attendance_test','--auth=trust','--encoding=UTF8','--no-locale'],capture_output=True,timeout=120,creationflags=cls.flags)
+            # This cluster is discarded, so a durability sync at initialization is unnecessary.
+            result=subprocess.run([str(cls.bin/'initdb'),'-D',str(cls.cluster),'-U','l2_attendance_test','--auth=trust','--encoding=UTF8','--no-locale','--no-sync'],capture_output=True,timeout=240,creationflags=cls.flags)
             if result.returncode:
                 raise RuntimeError('initdb failed for disposable cluster')
             with socket.socket() as sock:
@@ -90,6 +91,13 @@ class PostgresAttendanceConcurrencyTests(unittest.TestCase):
             db.session.add(appt)
             db.session.commit()
             self.student,self.provider,self.aid=student.id,provider.id,appt.id
+        # These regressions run on a metadata schema to isolate the existing
+        # lock paths. The migrated Phase 2 suite exercises the real journal.
+        if self._testMethodName != "runTest":
+            for name, value in (("approval_ready", True), ("approval_complete", False), ("post_initial_allocation", None)):
+                substitute = patch(f"payments.{name}", return_value=value)
+                substitute.start()
+                self.addCleanup(substitute.stop)
 
     def tearDown(self):
         with self.app.app_context():
@@ -193,6 +201,7 @@ class PostgresAttendanceConcurrencyTests(unittest.TestCase):
                 payment.method='GCash'
                 payment.transaction_reference='  Shared-Race-123  ' if index==0 else 'shared-race-123'
                 payment.receipt_path=f'test-only/{index}.png'
+                payment.submitted_at=utcnow()
                 db.session.add(payment)
                 db.session.flush()
                 payment_ids.append(payment.id)
@@ -204,7 +213,7 @@ class PostgresAttendanceConcurrencyTests(unittest.TestCase):
         with client.session_transaction() as session:
             session['_user_id']=str(admin_id)
             session['_fresh']=True
-        return client.post(f'/api/admin/payments/{payment_id}/approve',json={'confirmed':True})
+        return client.post(f'/api/admin/payments/{payment_id}/approve',json={'confirmed':True,'expected_revision':0})
 
     def test_two_admins_cannot_approve_unresolved_duplicate_claims(self):
         from models import Payment
@@ -593,7 +602,7 @@ class PostgresAttendanceConcurrencyTests(unittest.TestCase):
                     session["_user_id"] = str(admin_id)
                     session["_fresh"] = True
                 barrier.wait(timeout=10)
-                results.append(client.post(f"/api/admin/payments/{payment_id}/approve", json={"confirmed":True}).status_code)
+                results.append(client.post(f"/api/admin/payments/{payment_id}/approve", json={"confirmed":True,"expected_revision":1}).status_code)
             except Exception as exc:
                 failures.append(repr(exc))
         threads = [threading.Thread(target=work) for _ in range(2)]
@@ -661,7 +670,7 @@ class PostgresAttendanceConcurrencyTests(unittest.TestCase):
         from models import Payment, PaymentEvent
         pid, admins = self.reconciliation_case()
         cancel = (self.student,f"/api/bookings/{self.aid}/cancel",{'reason':'Demo participant cancellation'})
-        approve = (admins[0],f"/api/admin/payments/{pid}/approve",{'confirmed':True})
+        approve = (admins[0],f"/api/admin/payments/{pid}/approve",{'confirmed':True,'expected_revision':1})
         result = self.run_financial_lock_race(cancel,approve,'BOOKING_ENDED')
         self.assertEqual(result,{'first':200,'second':409})
         with self.app.app_context():
@@ -673,7 +682,7 @@ class PostgresAttendanceConcurrencyTests(unittest.TestCase):
     def test_approval_wins_then_waiting_cancellation_keeps_verification_and_flags_review(self):
         from models import Payment
         pid, admins = self.reconciliation_case()
-        approve = (admins[0],f"/api/admin/payments/{pid}/approve",{'confirmed':True})
+        approve = (admins[0],f"/api/admin/payments/{pid}/approve",{'confirmed':True,'expected_revision':1})
         cancel = (self.student,f"/api/bookings/{self.aid}/cancel",{'reason':'Demo participant cancellation'})
         result = self.run_financial_lock_race(approve,cancel,'VERIFIED')
         self.assertEqual(result,{'first':200,'second':200})

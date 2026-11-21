@@ -244,7 +244,7 @@ def test_history_events_do_not_authorize_payment_or_award_xp(f):
 def test_new_migration_is_additive_frozen_and_single_head_without_execution():
     root = Path(__file__).resolve().parents[1]
     scripts = ScriptDirectory(str(root/'migrations'))
-    assert scripts.get_heads() == ['f4c2a8d91e70']
+    assert scripts.get_heads() == ['c83d9f2a71e4']
     assert scripts.get_revision('e9b7c2d41a60').down_revision == 'c7e4a1b92d60'
     source = (root/'migrations/versions/e9b7c2d41a60_payment_audit_history.py').read_text(encoding='utf-8')
     tree = ast.parse(source)
