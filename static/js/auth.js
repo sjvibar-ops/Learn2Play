@@ -61,18 +61,23 @@
     $("eyeOpen").classList.toggle("hidden-svg", show);
     $("eyeClosed").classList.toggle("hidden-svg", !show);
     eyeBtn.setAttribute("aria-label", show ? "Hide password" : "Show password");
+    eyeBtn.setAttribute("aria-pressed", String(show));
   });
 
   // ---------- submit ----------
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (submit.disabled) return;
     clearNote();
 
     if (!EMAIL_RE.test(email.value.trim())) return showNote("Please enter a valid email address.");
     if (!password.value) return showNote("Please enter your password.");
 
     submit.disabled = true;
+    form.setAttribute("aria-busy", "true");
+    submit.setAttribute("aria-busy", "true");
     btnLabel.textContent = "Logging in…";
+    showNote("Logging in…", "success");
 
     try {
       const result = await apiPost("/api/auth/login", {
@@ -101,6 +106,9 @@
       showNote(error.message || "Something went wrong. Please try again.");
       submit.disabled = false;
       btnLabel.textContent = "Log in";
+    } finally {
+      form.removeAttribute("aria-busy");
+      submit.removeAttribute("aria-busy");
     }
   });
 

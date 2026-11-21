@@ -1432,6 +1432,9 @@ a.side-item { text-decoration: none; }
 
 .tb-profile { position: relative; }
 .tb-avatar:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
+.eye:focus-visible, .primary:focus-visible, .link:focus-visible {
+  outline: 2px solid var(--purple); outline-offset: 3px;
+}
 
 .dropdown {
   position: absolute;
@@ -4768,6 +4771,16 @@ html {
 .gp-week { display: grid; grid-template-columns: repeat(7,1fr); gap: 5px; }
 .gp-week span { display: grid; gap: 7px; padding: 8px 3px; border-radius: 9px; background: #222431; color: var(--txt3); font-size: 10px; text-align: center; }
 .gp-week b { color: var(--txt3); font-size: 11px; }
+.gp-streak-card .gp-streak-count { margin: 22px 0 0; }
+.gp-streak-count > span { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid rgba(251,191,36,.16); border-radius: 14px; background: linear-gradient(145deg,rgba(251,191,36,.15),rgba(251,113,133,.08)); font-size: 25px; }
+.gp-streak-count strong { font-size: 26px; letter-spacing: -.03em; }
+.gp-streak-card .gp-week { grid-template-columns: repeat(7,minmax(0,1fr)); gap: 8px; margin-top: 24px; }
+.gp-streak-card .gp-week span { min-width: 0; min-height: 68px; align-content: center; gap: 9px; border: 1px solid rgba(162,167,187,.08); border-radius: 12px; background: linear-gradient(180deg,rgba(162,167,187,.08),rgba(162,167,187,.035)); color: var(--txt3); font-size: 10px; font-weight: 600; }
+.gp-streak-card .gp-week .one { border-color: rgba(74,222,128,.2); background: linear-gradient(180deg,rgba(74,222,128,.075),rgba(74,222,128,.035)); color: var(--txt2); }
+.gp-streak-card .gp-week .one b { display: grid; width: 24px; height: 24px; place-items: center; justify-self: center; border-radius: 50%; background: rgba(74,222,128,.12); color: var(--green); font-size: 15px; }
+.gp-streak-legend { display: flex; align-items: center; gap: 8px; margin-top: 13px; color: var(--green); font-size: 10px; line-height: 1.45; }
+.gp-streak-legend-mark { display: inline-grid; flex: 0 0 19px; width: 19px; height: 19px; place-items: center; border: 1px solid rgba(74,222,128,.2); border-radius: 7px; background: rgba(74,222,128,.1); color: var(--green); font-size: 12px; font-weight: 700; }
+.gp-streak-card > p.gp-footnote { margin-top: 10px; font-size: 10px; line-height: 1.5; }
 .gp-week .both { background: rgba(74,222,128,.1); color: var(--green); }
 .gp-week .both b { color: var(--green); }
 .gp-week .one { background: rgba(251,191,36,.09); color: var(--gold); }
@@ -4787,6 +4800,9 @@ html {
 .gp-bundle { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
 .gp-coming-soon { display: inline-block; margin-top: 10px; }
 .gp-leaderboard { background: rgba(124,108,245,.06); }
+.gp-leaderboard { display: grid; justify-items: start; gap: 10px; }
+.gp-leaderboard h3, .gp-leaderboard p { margin: 0; }
+.gp-leaderboard .gp-primary-link { display: inline-flex; align-items: center; justify-content: center; margin-top: 2px; }
 .gp-leaderboard > div { display: flex; justify-content: space-between; gap: 8px; margin-top: 12px; color: var(--lavender); font-size: 9px; }
 .gp-leaderboard > div span { color: var(--txt3); }
 .gp-cross-heading { margin-top: 28px; }
@@ -5020,6 +5036,7 @@ body.dashboard[data-dashboard-view="progress"] .sidebar { display: none; }
 .student-session-focus { padding: 12px; border: 1px solid rgba(255,255,255,.035); border-radius: 10px; background: var(--bg); }
 .student-session-focus > span { color: var(--txt3); font-size: 9px; font-weight: 700; letter-spacing: .08em; }
 .student-session-focus p { margin-top: 6px; color: var(--txt2); font-size: 12px; line-height: 1.55; }
+.attendance-confirmation-note { color: var(--txt2); }
 .student-session-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .student-session-actions .session-action { min-width: 120px; padding: 9px 13px; }
 #studentSessionsView .sessions-empty-box[hidden] { display: none; }
@@ -5244,3 +5261,82 @@ body.profile-body .profile-grid-layout .stat-card-item { background:#10131c; }
 .browse-results-section .card-footer { gap:12px; margin-top:18px; }
 @media (max-width:900px) { .browse-results-section .grid { grid-template-columns:minmax(0,1fr); } }
 @media (max-width:760px) { .dashboard[data-dashboard-view="browse"] .browse-directory-hero { padding:28px 20px; } }
+
+/* Provider applications */
+.role-applications { margin-top: 28px; }
+.role-applications [hidden] { display: none !important; }
+.role-applications-head h3 { color: var(--txt); font-size: 15px; font-weight: 600; }
+.role-applications-head p { color: var(--txt3); font-size: 12.5px; margin: 2px 0 14px; }
+.role-app-card {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+}
+.role-app-card .role-icon-avatar { font-weight: 700; font-size: 16px; }
+.role-app-loading { grid-column: 1 / -1; color: var(--txt3); font-size: 12.5px; }
+.role-app-dates { font-size: 12px; }
+.role-app-note, .role-app-files {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--txt2);
+}
+.role-app-note strong, .role-app-files strong { color: var(--txt); font-size: 12px; }
+.role-app-note p { color: var(--txt2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.role-app-files ul { list-style: none; margin: 6px 0 0; padding: 0; }
+.role-app-files li { overflow-wrap: anywhere; padding: 2px 0; }
+.role-app-side { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.role-badge.pending { background: rgba(251, 191, 36, 0.14); color: var(--gold); border: 1px solid rgba(251, 191, 36, 0.3); }
+.role-badge.revision { background: rgba(124, 108, 245, 0.16); color: var(--lavender); border: 1px solid rgba(124, 108, 245, 0.35); }
+.role-badge.rejected { background: rgba(248, 113, 113, 0.14); color: var(--danger); border: 1px solid rgba(248, 113, 113, 0.3); }
+.role-app-action:disabled { opacity: .6; cursor: not-allowed; }
+.role-applications .form-feedback-msg.error { color: var(--danger); }
+@media (max-width: 640px) {
+  .role-app-card { grid-template-columns: 40px minmax(0, 1fr); }
+  .role-app-side { grid-column: 1 / -1; flex-direction: row; align-items: center; flex-wrap: wrap; }
+}
+
+/* Batch 2.2A-2: inline application form */
+.role-app-action:not(:disabled) { cursor: pointer; opacity: 1; }
+.role-app-form {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.role-app-field { display: flex; flex-direction: column; gap: 6px; }
+.role-app-field label { color: var(--txt); font-size: 13px; font-weight: 600; }
+.role-app-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--txt);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+.role-app-textarea:focus { outline: 2px solid var(--purple); outline-offset: 1px; }
+.role-app-textarea:disabled { opacity: .6; }
+.role-app-file { color: var(--txt2); font-size: 12.5px; max-width: 100%; }
+.role-app-help { color: var(--txt3); font-size: 12px; }
+.role-app-selected-files { list-style: none; margin: 0; padding: 0; color: var(--txt2); font-size: 12.5px; }
+.role-app-selected-files li { overflow-wrap: anywhere; padding: 2px 0; }
+.role-app-field-error, .role-app-form-message.error { color: var(--danger); font-size: 12.5px; }
+.role-app-field-error:empty, .role-app-form-message:empty { display: none; }
+.role-app-form-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.role-app-submit:disabled, .role-app-cancel:disabled { opacity: .6; cursor: not-allowed; }
+.role-app-notice { margin-top: 10px; padding: 8px 12px; border-radius: 8px; font-size: 12.5px; border: 1px solid var(--line); overflow-wrap: anywhere; }
+.role-app-notice.success { color: var(--green); border-color: rgba(74, 222, 128, 0.3); background: rgba(74, 222, 128, 0.08); }
+.role-app-notice.error { color: var(--danger); border-color: rgba(248, 113, 113, 0.3); background: rgba(248, 113, 113, 0.08); }

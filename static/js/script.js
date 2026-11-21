@@ -47,123 +47,55 @@ const user = getUser();
 const signupCta = document.querySelector(".side-cta");
 if (signupCta) signupCta.classList.add("hidden");
 
-/* ---------- Dashboard views and browser-only XP tracker ---------- */
+/* ---------- Dashboard views and verified student progress ---------- */
 const dashboardView = new URLSearchParams(window.location.search).get("view") === "browse" ? "browse" : "progress";
 document.body.dataset.dashboardView = dashboardView;
 const gamificationPreview = document.getElementById("gamificationPreview");
-const browseSections = document.querySelectorAll(".dashboard-search-hero, .tutor-grid-section");
-browseSections.forEach((section) => section.classList.toggle("hidden", dashboardView !== "browse"));
-document.querySelectorAll("[data-dashboard-browse]").forEach((section) => {
+document.querySelectorAll(".dashboard-search-hero, .tutor-grid-section, [data-dashboard-browse]").forEach((section) => {
   section.classList.toggle("hidden", dashboardView !== "browse");
 });
 
 if (gamificationPreview) {
-  const progressKey = `l2_gamification_${String(document.body.dataset.accountId || user.id || user.email || "local").toLowerCase()}`;
-  const levelSteps = [
-    { level: 1, name: "Beginner", at: 0 },
-    { level: 2, name: "Learner", at: 100 },
-    { level: 3, name: "Competitor", at: 250 },
-    { level: 4, name: "Achiever", at: 500 },
-    { level: 5, name: "Elite Student Gamer", at: 1000 },
-  ];
-
-  function emptyProgress() {
-    return { academicXp: 0, gamingXp: 0, activities: [] };
+  const message = document.getElementById("gpProgressMessage");
+  function setQuest(card, value) {
+    const count = Math.min(value.count, value.target);
+    card.querySelector("[data-quest-count]").textContent = `${count} of ${value.target}`;
+    card.querySelector("[data-quest-bar]").style.width = `${Math.min(100, count / value.target * 100)}%`;
+    card.classList.toggle("gp-quest-done", count >= value.target);
   }
-  function readProgress() {
-    try {
-      const saved = JSON.parse(store.get(progressKey));
-      if (saved && Number.isFinite(saved.academicXp) && Number.isFinite(saved.gamingXp) && Array.isArray(saved.activities)) {
-        return saved;
-      }
-    } catch (e) { /* start fresh if browser data is invalid */ }
-    return emptyProgress();
-  }
-  let progress = readProgress();
-
-  function saveProgress() {
-    return store.set(progressKey, JSON.stringify(progress));
-  }
-  function weekStart(date) {
-    const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-    monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-    monday.setHours(0, 0, 0, 0);
-    return monday;
-  }
-  function sameWeek(a, b) {
-    return weekStart(a).getTime() === weekStart(b).getTime();
-  }
-  function updateProgress() {
-    const total = progress.academicXp + progress.gamingXp;
-    const currentLevel = [...levelSteps].reverse().find((item) => total >= item.at) || levelSteps[0];
-    const nextLevel = levelSteps.find((item) => item.at > total);
-    const rangeStart = currentLevel.at;
-    const rangeEnd = nextLevel ? nextLevel.at : rangeStart + 500;
-    const levelPercent = Math.max(0, Math.min(100, ((total - rangeStart) / (rangeEnd - rangeStart)) * 100));
+  function renderProgress(data) {
+    const total = data.total_xp;
+    const next = data.next_level_xp;
+    const percent = Math.max(0, Math.min(100, data.level_progress));
     document.getElementById("gpTotalXp").textContent = total;
-    document.getElementById("gpAcademicXp").textContent = progress.academicXp;
-    document.getElementById("gpGamingXp").textContent = progress.gamingXp;
-    document.getElementById("gpLevelName").textContent = `Level ${currentLevel.level} · ${currentLevel.name}`;
-    document.getElementById("gpNextLevel").textContent = nextLevel ? `${nextLevel.at - total} XP to Level ${nextLevel.level}` : "Top level reached · keep earning XP";
-    const levelBar = document.getElementById("gpLevelBar");
-    levelBar.style.width = `${levelPercent}%`;
-    const levelProgress = document.getElementById("gpLevelProgress");
-    levelProgress.setAttribute("aria-valuenow", String(Math.round(levelPercent)));
-    levelProgress.setAttribute("aria-valuetext", nextLevel ? `${total - rangeStart} of ${rangeEnd - rangeStart} XP to next level` : `${total} XP, top level`);
-    document.getElementById("gpAcademicBar").style.width = `${Math.min(100, progress.academicXp % 100)}%`;
-    document.getElementById("gpGamingBar").style.width = `${Math.min(100, progress.gamingXp % 100)}%`;
-
-    const academicCount = progress.activities.filter((item) => item.path === "academic").length;
-    const gamingCount = progress.activities.filter((item) => item.path === "gaming").length;
-    const now = new Date();
-    const thisWeekActivities = progress.activities.filter((item) => sameWeek(new Date(item.at), now));
-    const hasAcademic = thisWeekActivities.some((item) => item.path === "academic");
-    const hasGaming = thisWeekActivities.some((item) => item.path === "gaming");
-    const questValues = [
-      { count: Math.min(academicCount, 3), total: 3, label: `${Math.min(academicCount, 3)} of 3` },
-      { count: Math.min(gamingCount, 2), total: 2, label: `${Math.min(gamingCount, 2)} of 2` },
-      { count: Number(hasAcademic) + Number(hasGaming), total: 2, label: `${Number(hasAcademic) + Number(hasGaming)} of 2 this week` },
-      { count: Math.min(total, 100), total: 100, label: `${total} of 100 XP` },
-    ];
-    gamificationPreview.querySelectorAll("[data-quest-kind]").forEach((quest, index) => {
-      const item = questValues[index];
-      quest.querySelector("[data-quest-count]").textContent = item.label;
-      quest.querySelector("[data-quest-bar]").style.width = `${Math.min(100, (item.count / item.total) * 100)}%`;
-      quest.classList.toggle("gp-quest-done", item.count >= item.total);
-    });
-
-    const monday = weekStart(now);
+    document.getElementById("gpAcademicXp").textContent = data.academic_xp;
+    document.getElementById("gpGamingXp").textContent = data.gaming_xp;
+    document.getElementById("gpLevelName").textContent = `Level ${data.level} - ${data.level_name}`;
+    document.getElementById("gpNextLevel").textContent = next ? `${next - total} XP to Level ${data.level + 1}` : "Top level reached - keep earning XP";
+    document.getElementById("gpLevelBar").style.width = `${percent}%`;
+    const progress = document.getElementById("gpLevelProgress");
+    progress.setAttribute("aria-valuenow", String(Math.round(percent)));
+    progress.setAttribute("aria-valuetext", next ? `${total} XP; next level at ${next} XP` : `${total} XP, top level`);
+    document.getElementById("gpAcademicBar").style.width = `${data.academic_xp % 100}%`;
+    document.getElementById("gpGamingBar").style.width = `${data.gaming_xp % 100}%`;
+    const quests = [data.quests.academic_week, data.quests.gaming_week, data.quests.balanced_week, data.quests.first_milestone];
+    gamificationPreview.querySelectorAll("[data-quest-kind]").forEach((card, i) => setQuest(card, quests[i]));
+    document.getElementById("gpStreakCount").textContent = `${data.balance_streak_weeks} ${data.balance_streak_weeks === 1 ? "week" : "weeks"}`;
+    const activityDays = new Set(data.activity_days || []);
+    const weekStart = new Date(`${data.week_start}T00:00:00Z`);
     gamificationPreview.querySelectorAll("[data-weekday]").forEach((day) => {
-      const date = new Date(monday);
-      date.setDate(date.getDate() + Number(day.dataset.weekday));
-      const dayItems = progress.activities.filter((item) => {
-        const activityDate = new Date(item.at);
-        return activityDate.getFullYear() === date.getFullYear()
-          && activityDate.getMonth() === date.getMonth()
-          && activityDate.getDate() === date.getDate();
-      });
-      const dailyAcademic = dayItems.some((item) => item.path === "academic");
-      const dailyGaming = dayItems.some((item) => item.path === "gaming");
-      const both = dailyAcademic && dailyGaming;
-      day.classList.toggle("both", both);
-      day.classList.toggle("one", !both && (dailyAcademic || dailyGaming));
-      day.querySelector("b").textContent = both ? "✓" : dailyAcademic || dailyGaming ? "•" : "·";
+      const date = new Date(weekStart);
+      date.setUTCDate(date.getUTCDate() + Number(day.dataset.weekday));
+      const hasActivity = activityDays.has(date.toISOString().slice(0, 10));
+      day.classList.toggle("one", hasActivity);
+      day.querySelector("b").textContent = hasActivity ? "✓" : "·";
     });
-    let streak = 0;
-    let cursor = weekStart(now);
-    while (true) {
-      const weekItems = progress.activities.filter((item) => sameWeek(new Date(item.at), cursor));
-      if (!weekItems.some((item) => item.path === "academic") || !weekItems.some((item) => item.path === "gaming")) break;
-      streak += 1;
-      cursor.setDate(cursor.getDate() - 7);
-    }
-    document.getElementById("gpStreakCount").textContent = `${streak} ${streak === 1 ? "week" : "weeks"}`;
-    ["academic", "gaming", "combined"].forEach((badge) => {
-      const unlocked = badge === "academic" ? academicCount > 0 : badge === "gaming" ? gamingCount > 0 : academicCount > 0 && gamingCount > 0;
-      gamificationPreview.querySelector(`[data-badge="${badge}"]`).classList.toggle("earned", unlocked);
+    Object.entries(data.badges).forEach(([name, earned]) => {
+      const badge = gamificationPreview.querySelector(`[data-badge="${name}"]`);
+      if (badge) badge.classList.toggle("earned", earned);
     });
+    message.textContent = "Progress is based on completed sessions recorded by Learn2Play.";
   }
-
   gamificationPreview.querySelectorAll("[data-quest-filter]").forEach((button) => {
     button.addEventListener("click", () => {
       const filter = button.dataset.questFilter;
@@ -177,40 +109,13 @@ if (gamificationPreview) {
       });
     });
   });
-
-  const activityDialog = document.getElementById("gpActivityDialog");
-  const openActivityButton = document.getElementById("gpOpenActivity");
-  const closeActivityButton = document.getElementById("gpCloseActivity");
-  openActivityButton.addEventListener("click", () => activityDialog.showModal());
-  closeActivityButton.addEventListener("click", () => activityDialog.close());
-  activityDialog.addEventListener("click", (event) => {
-    if (event.target === activityDialog) activityDialog.close();
-  });
-
-  gamificationPreview.querySelectorAll("[data-xp-path]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const path = button.dataset.xpPath;
-      const amount = Number(button.dataset.xpAmount);
-      progress[`${path}Xp`] += amount;
-      progress.activities.push({ path, amount, label: button.dataset.xpLabel, at: new Date().toISOString() });
-      progress.activities = progress.activities.slice(-500);
-      const saved = saveProgress();
-      updateProgress();
-      const feedback = document.getElementById("gpActivityFeedback");
-      feedback.textContent = saved === false
-        ? `+${amount} XP added for this visit. Browser storage is unavailable, so progress may not persist.`
-        : `+${amount} ${path === "academic" ? "Academic" : "Gaming"} XP added. Saved in this browser only.`;
-    });
-  });
-
-  document.getElementById("gpResetProgress").addEventListener("click", () => {
-    if (!window.confirm("Reset this browser's Learn2Play XP and activity history?")) return;
-    progress = emptyProgress();
-    store.remove(progressKey);
-    updateProgress();
-    document.getElementById("gpActivityFeedback").textContent = "Local progress reset. Your real Learn2Play account was not changed.";
-  });
-  updateProgress();
+  fetch("/api/student/progress", { credentials: "same-origin", headers: { Accept: "application/json" } })
+    .then(async (response) => {
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.message || "Progress could not be loaded.");
+      renderProgress(data);
+    })
+    .catch((error) => { message.textContent = error.message || "Progress could not be loaded. Refresh to try again."; });
 }
 
 /* ============================================================
@@ -529,7 +434,10 @@ updateSidebarSchedule(null, null);
     const badge = isAcademic
       ? '<span class="badge academic">Academic</span>'
       : '<span class="badge gaming">Gaming</span>';
-    const rating = Number(t.rating || 5.0);
+    const reviewCount = Number(t.reviews);
+    const rating = Number(t.rating);
+    const hasReviews = Number.isFinite(reviewCount) && reviewCount > 0 &&
+      t.rating != null && t.rating !== "" && Number.isFinite(rating) && rating > 0 && rating <= 5;
     const price = t.price || 300;
 
     const topicsText = (t.topics && t.topics.length) ? t.topics.join(" • ") : (isAcademic ? "Academic Tutoring" : "Gaming Coaching");
@@ -549,8 +457,8 @@ updateSidebarSchedule(null, null);
         '<div class="card-body">' +
           '<div class="card-name">' + esc(t.name) + "</div>" +
           '<div class="card-subject">' + esc(topicsText) + "</div>" +
-          (Number(t.reviews || 0) > 0
-            ? '<div class="card-stars"><span class="stars">' + starsSVG(rating) + '</span><span class="rating">' + rating.toFixed(1) + '</span><span class="reviews">(' + esc(t.reviews) + ' reviews)</span></div>'
+          (hasReviews
+            ? '<div class="card-stars"><span class="stars" aria-hidden="true">' + starsSVG(rating) + '</span><span class="rating">' + rating.toFixed(1) + '</span><span class="reviews">(' + esc(reviewCount) + (reviewCount === 1 ? ' review' : ' reviews') + ')</span></div>'
             : '<div class="card-stars"><span class="reviews">New educator · No reviews yet</span></div>') +
           '<p class="card-desc">' + esc(t.bio) + "</p>" +
           '<div class="card-footer">' +

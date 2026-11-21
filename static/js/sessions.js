@@ -77,7 +77,8 @@
         cards.forEach(card => {
             const state = card.dataset.bookingStatus;
             const start = Date.parse(card.dataset.startTime);
-            const isPast = state === "completed" || state === "rejected";
+            const isPast = state === "completed" || state === "rejected"
+                || (activeStatuses.includes(state) && now >= start + (Number(card.dataset.duration) || 60) * 60 * 1000);
             const isCancelled = state === "cancelled";
             const isActive = activeStatuses.includes(state);
             const matchesFilter = status === "upcoming"
@@ -127,6 +128,13 @@
                 avatar.setAttribute("aria-expanded", "false");
             }
         });
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "Escape" && !dropdown.classList.contains("hidden")) {
+                dropdown.classList.add("hidden");
+                avatar.setAttribute("aria-expanded", "false");
+                avatar.focus();
+            }
+        });
     }
 
     if (logoutBtn) {
@@ -173,14 +181,27 @@
                 const meaningful = mine.filter(b => ["pending", "accepted", "scheduled", "completed", "cancelled", "rejected"].includes(b.status));
                 sessionList.innerHTML = meaningful.map(b => {
                     const statusClass = b.status === "accepted" ? "status-accepted" : b.status === "scheduled" ? "status-scheduled" : b.status === "pending" ? "status-pending" : b.status === "completed" ? "status-completed" : "status-cancelled";
-                    const joinBtn = (b.status === "accepted" || b.status === "scheduled") ? `<button class="session-action join-session" data-id="${b.id}">Join session</button>` : "";
+                    const ended = Date.parse(b.start_time) + Number(b.duration || 60) * 60000 <= now;
+                    const bookingEnded = ["cancelled", "rejected"].includes(b.status);
+                    const joinBtn = b.payment_satisfied !== false && ["accepted", "scheduled"].includes(b.status) ? `<button class="session-action join-session" data-id="${b.id}">Join session</button>` : "";
                     const cancelBtn = ["pending", "accepted", "scheduled"].includes(b.status) ? `<button class="session-action cancel-booking" data-id="${b.id}">Cancel booking</button>` : "";
+                    const confirmBtn = b.payment_satisfied !== false && ended && ["accepted", "scheduled"].includes(b.status) && !b.student_confirmed && !b.attendance_disputed && !b.attendance_closed
+                        ? `<button class="session-action booking-action" data-id="${b.id}" data-action="confirm-attendance">Confirm attendance</button>` : "";
+                    const disputeBtn = ended && ["accepted", "scheduled"].includes(b.status) && !b.attendance_disputed && !b.attendance_closed
+                        ? `<button class="session-action booking-action" data-id="${b.id}" data-action="dispute-attendance">Report disagreement</button>` : "";
+                    const confirmNote = bookingEnded ? "Booking ended. Attendance confirmation and XP are unavailable." : b.attendance_closed ? "Attendance closed by an administrator without XP." : b.attendance_disputed ? "Attendance disputed. XP is on hold; please contact support."
+                        : b.status === "completed"
+                        ? (b.xp_awarded ? "Attendance confirmed by both. 50 XP awarded." : "Completed before two-sided confirmation; no XP was awarded.")
+                        : (b.student_confirmed ? "You confirmed attendance; waiting for your educator." : b.provider_confirmed ? "Your educator confirmed; please confirm attendance." : ended ? "Confirm attendance after your session." : "Both you and your educator confirm after the session.");
+                    const paymentNote = bookingEnded
+                        ? (b.reconciliation_state ? `Booking-end reconciliation: ${b.reconciliation_state}. No refund is implied by cancellation; see your payment history for the recorded outcome.` : "Booking ended. No further session access is available.")
+                        : b.payment_satisfied === false ? "Payment pending verification; attendance confirmation and XP are blocked." : b.payment_status === "VERIFIED" ? "Payment verified." : "No payment requirement for this booking.";
                     const price = b.price === null || b.price === undefined ? "" : `<strong class="session-price">₱${Number(b.price).toLocaleString("en-PH", {minimumFractionDigits: 2, maximumFractionDigits: 2})}<small> session rate</small></strong>`;
                     return `<article class="scheduled-session student-session-card" data-booking-status="${escapeHtml(b.status)}" data-start-time="${escapeHtml(b.start_time)}" data-duration="${escapeHtml(b.duration)}">
                         <div class="student-session-top"><span class="session-status ${statusClass}">${escapeHtml(b.status)}</span><span class="session-datetime">${escapeHtml(b.formatted)}</span>${price}</div>
                         <div class="student-educator-row"><div class="student-educator-avatar" aria-hidden="true">${escapeHtml(String(b.mentor || "E").trim().slice(0, 1).toUpperCase())}</div><div class="student-educator-copy"><strong>${escapeHtml(b.mentor)}</strong><span>${escapeHtml(b.topic || "Learning session")}</span></div></div>
                         <div class="student-session-focus"><span>SESSION TOPIC</span><p>${escapeHtml(b.notes || b.topic || "No session notes were added.")}</p></div>
-                        <div class="student-session-actions">${joinBtn}${cancelBtn}</div>
+                        <p class="attendance-confirmation-note">${escapeHtml(confirmNote)}</p><p class="attendance-confirmation-note">${escapeHtml(paymentNote)}</p><div class="student-session-actions">${b.payment_url ? `<a class="session-action" href="${escapeHtml(b.payment_url)}">Payment: ${escapeHtml(b.payment_status)}</a>` : ""}${joinBtn}${confirmBtn}${disputeBtn}${cancelBtn}</div>
                     </article>`;
                 }).join("");
                 filterSessions(document.querySelector(".session-tab.active")?.dataset.status || "upcoming", now);
@@ -201,10 +222,25 @@
             const upcoming = bookings.filter(b => b.provider_id === window.L2UserId
                 && confirmedStatuses.includes(b.status)
                 && isUpcomingOrInProgress(b.status, Date.parse(b.start_time), b.duration, now));
+            const awaitingProviderConfirmation = bookings.filter(b => b.provider_id === window.L2UserId
+                && ["accepted", "scheduled"].includes(b.status)
+                && Date.parse(b.start_time) + Number(b.duration || 60) * 60000 <= now);
             const requestList = document.getElementById("mentorRequestList");
             const upcomingList = document.getElementById("mentorUpcomingList");
             if (requestList) requestList.innerHTML = requests.length ? requests.map(b => `<article class="mentor-request-card"><div class="mentor-request-details"><h3>${escapeHtml(b.student)} · ${escapeHtml(b.topic)}</h3><p>${escapeHtml(b.formatted)}</p><span>${escapeHtml(b.notes || "No note provided")}</span></div><div class="mentor-request-actions"><button class="session-action booking-action" data-id="${b.id}" data-action="accept">Accept</button><button class="session-action cancel-session-action booking-action" data-id="${b.id}" data-action="reject">Decline</button></div></article>`).join("") : '<p class="sessions-empty">No pending booking requests.</p>';
-            if (upcomingList) upcomingList.innerHTML = upcoming.length ? upcoming.map(b => `<article class="mentor-upcoming-item"><div><strong>${escapeHtml(b.student)} · ${escapeHtml(b.topic)}</strong><span>${escapeHtml(b.formatted)}</span></div><button class="session-action join-session" data-id="${b.id}">Join Session</button></article>`).join("") : '<p class="sessions-empty">No confirmed sessions scheduled.</p>';
+            const providerSessions = [...new Map([...upcoming, ...awaitingProviderConfirmation].map(b => [b.id, b])).values()];
+            if (upcomingList) upcomingList.innerHTML = providerSessions.length ? providerSessions.map(b => {
+                const ended = Date.parse(b.start_time) + Number(b.duration || 60) * 60000 <= now;
+                const confirm = b.attendance_closed ? `<span class="attendance-confirmation-note">Attendance closed without XP.</span>` : b.attendance_disputed
+                    ? `<span class="attendance-confirmation-note">Attendance disputed; XP on hold. Contact support.</span>`
+                    : b.payment_satisfied === false ? `<span class="attendance-confirmation-note">Payment pending verification; confirmation and XP are blocked.</span>`
+                    : ended && !b.provider_confirmed
+                    ? `<button class="session-action booking-action" data-id="${b.id}" data-action="complete">Confirm session</button>`
+                    : ended ? `<span class="attendance-confirmation-note">You confirmed - ${b.student_confirmed ? "both confirmed; 50 XP awarded" : "waiting for learner"}</span>`
+                    : `<button class="session-action join-session" data-id="${b.id}">Join Session</button>`;
+                const dispute = ended && !b.attendance_disputed && !b.attendance_closed ? `<button class="session-action booking-action" data-id="${b.id}" data-action="dispute-attendance">Report disagreement</button>` : "";
+                return `<article class="mentor-upcoming-item"><div><strong>${escapeHtml(b.student)} · ${escapeHtml(b.topic)}</strong><span>${escapeHtml(b.formatted)}</span></div>${confirm}${dispute}</article>`;
+            }).join("") : '<p class="sessions-empty">No confirmed sessions scheduled.</p>';
             document.getElementById("mentorPendingCount")?.replaceChildren(String(requests.length));
             document.getElementById("mentorUpcomingCount")?.replaceChildren(String(upcoming.length));
             document.getElementById("mentorRequestCount")?.replaceChildren(`${requests.length} new`);
@@ -224,7 +260,16 @@
             const meta = document.querySelector('meta[name="csrf-token"]');
             const token = meta && meta.content ? meta.content : await fetch("/api/csrf-token").then(r => r.json()).then(d => d.csrf_token);
             const kind = action.classList.contains("cancel-booking") ? "cancel" : action.dataset.action;
-            const result = await fetch(`/api/bookings/${action.dataset.id}/${kind}`, {method:"POST", headers:{"X-CSRFToken":token}}).then(r => r.json());
+            let body;
+            const headers = {"X-CSRFToken":token};
+            if (kind === "dispute-attendance") {
+                const reason = window.prompt("Explain the attendance disagreement (5–1,000 characters). Your reason will be recorded for admin review.");
+                if (reason === null) return;
+                if (reason.trim().length < 5 || reason.trim().length > 1000) throw new Error("Enter a reason of 5–1,000 characters.");
+                headers["Content-Type"] = "application/json";
+                body = JSON.stringify({note:reason.trim()});
+            }
+            const result = await fetch(`/api/bookings/${action.dataset.id}/${kind}`, {method:"POST", headers, body}).then(r => r.json());
             if (!result.ok) throw new Error(result.message || "Could not update booking.");
             loadBookings();
         } catch (error) { window.alert(error.message || "The requested action could not be completed."); }

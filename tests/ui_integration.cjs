@@ -82,9 +82,9 @@ async function checkDirectory() {
   const price = elements["price-display"];
   const count = elements["results-count"];
   const tutors = [
-    { id: 1, name: "Alyssa", category: "academic", price: 500 },
-    { id: 2, name: "Ben", category: "gaming", price: 2000 },
-    { id: 3, name: "Clara", category: "academic", price: 60000 },
+    { id: 1, name: "Alyssa", category: "academic", price: 500, reviews: 3 },
+    { id: 2, name: "Ben", category: "gaming", price: 2000, rating: null, reviews: 2 },
+    { id: 3, name: "Clara", category: "academic", price: 60000, rating: 4.25, reviews: 1 },
   ];
   runInNewContext(source("script.js"), {
     document: {
@@ -122,6 +122,17 @@ async function checkDirectory() {
   assert.equal(count.textContent, "3 educators shown");
   assert.match(elements.tutorGrid.innerHTML, /Ben/);
   assert.match(elements.tutorGrid.innerHTML, /Clara/);
+  assert.match(elements.tutorGrid.innerHTML, /4\.3/);
+  assert.match(elements.tutorGrid.innerHTML, /1 review\)/);
+  assert.equal((elements.tutorGrid.innerHTML.match(/No reviews yet/g) || []).length, 2);
+  assert.doesNotMatch(elements.tutorGrid.innerHTML, />5\.0</);
+  for (const rating of [null, undefined, "", NaN, Infinity, -1, 6]) {
+    tutors[2].rating = rating;
+    elements["reset-filters"].listeners.get("click")();
+    assert.equal((elements.tutorGrid.innerHTML.match(/No reviews yet/g) || []).length, 3);
+    assert.doesNotMatch(elements.tutorGrid.innerHTML, /class="rating"/);
+  }
+
 }
 
 checkModes();

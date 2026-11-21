@@ -1,0 +1,9 @@
+{% extends 'payments/base.html' %}{% block content %}<h1>Payment history</h1>
+<p>Payments are confirmed only after an administrator verifies receipt of funds.</p>
+{% for p in rows %}<article class="payment-card"><h2><a href="{{ url_for('payments.student_payment', booking_id=p.appointment_id) }}">{{ p.appointment.topic }}</a></h2>
+<p>{{ p.appointment.provider.display_name }} / {{ format_dt(p.appointment.start_time) }} PHT</p>
+<p>{{ p.reference }} / {{ p.appointment.currency }} {{ '%.2f'|format(p.amount) }} / <strong>{{ p.status }}</strong></p>
+{% if p.submitted_at %}<p>Submitted {{ format_dt(p.submitted_at) }} PHT</p>{% endif %}
+{% if p.reviewed_at %}<p>Reviewed {{ format_dt(p.reviewed_at) }} PHT{% if p.status == 'VERIFIED' %} / Verified{% endif %}</p>{% endif %}
+{% if p.rejection_reason %}<p>Rejection reason: {{ p.rejection_reason }}</p>{% endif %}{% set reconciliation_payment = p %}{% include 'payments/_reconciliation.html' %}{% set audit_payment = p %}{% include 'payments/_audit.html' %}</article>
+{% else %}<p>No payments yet. Paid bookings will appear here.</p>{% endfor %}{% endblock %}

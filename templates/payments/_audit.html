@@ -1,0 +1,33 @@
+<section class="payment-audit" aria-label="Submission and review history">
+<h3>Submission and review history</h3>
+{% if audit_payment.submission_revision == 0 and (audit_payment.status != 'PENDING' or audit_payment.receipt_path) %}<p>Legacy payment: earlier attempts may not have been recorded. Only available facts are shown.</p>{% endif %}
+<ol>{% for event in audit_payment.events %}<li>
+<strong>{% if event.reconciliation_state is not none %}{{ event.event_type }} / reconciliation #{{ event.reconciliation_version }}{% elif event.event_type == 'LEGACY_SNAPSHOT' %}Legacy snapshot (capture time shown; earlier history unavailable){% elif event.revision == 0 %}Legacy record: {{ event.event_type }}{% else %}Attempt {{ event.revision }}: {{ event.event_type }}{% endif %}</strong>
+{% if event.reconciliation_state is none and event.revision > 0 and event.revision == audit_payment.submission_revision %}<span class="payment-current-revision">Current submission</span>{% endif %}
+<p>{{ format_dt(event.created_at) }} PHT / {{ event.previous_status }} &rarr; {{ event.new_status }}</p>
+{% if event.reconciliation_state is not none %}
+<p>Reconciliation: {{ event.reconciliation_previous_state }} &rarr; {{ event.reconciliation_state }}</p>
+<p>{{ event.reconciliation_explanation }}</p>
+{% if event.booking_ending_reason %}<p>Booking ending reason: {{ event.booking_ending_reason }}</p>{% endif %}
+{% if current_user.is_admin %}
+<p>Recorded by {{ event.actor.display_name }} (user #{{ event.actor_id }})</p>
+{% if event.decision_reason %}<p>Internal reason: {{ event.decision_reason }}</p>{% endif %}
+{% if event.confirmation_notes %}<p>External check/confirmation notes: {{ event.confirmation_notes }}</p>{% endif %}
+{% if event.evidence_reference %}<p>Evidence reference: {{ event.evidence_reference }}</p>{% endif %}
+{% if event.authority_name %}<p>External confirmer: {{ event.authority_name }} / {{ event.authority_capacity }} (recorded attestation; identity not authenticated by this application)</p>{% endif %}
+{% if event.independent_check_confirmed %}<p>Independent no-funds check recorded.</p>{% endif %}
+{% if event.funds_received_confirmed %}<p>Receiving-account funds check recorded.</p>{% endif %}
+{% if event.authorized_refund_confirmed %}<p>External refund authorization recorded.</p>{% endif %}
+{% if event.account_holder_refund_confirmed %}<p>Account-holder confirmation of external refund completion recorded.</p>{% endif %}
+{% if event.authorized_retention_confirmed %}<p>External retention authorization recorded.</p>{% endif %}
+{% endif %}{% endif %}
+{% if event.submitted_at %}<p>Submitted {{ format_dt(event.submitted_at) }} PHT</p>{% endif %}
+{% if event.reviewed_at %}<p>Decision {{ format_dt(event.reviewed_at) }} PHT</p>{% endif %}
+{% if event.rejection_reason %}<p>Rejection reason: {{ event.rejection_reason }}</p>{% endif %}
+{% if current_user.is_admin %}
+{% if event.reviewer %}<p>{{ "Original payment reviewer" if event.reconciliation_state is not none else "Reviewer" }}: {{ event.reviewer.display_name }} (admin #{{ event.reviewer_id }})</p>{% endif %}
+<p>Recorded by user #{{ event.actor_id }} / {{ event.method or 'Unknown method' }} / Transaction: {{ event.transaction_reference or 'Unknown' }}</p>
+{% endif %}
+{% if event.receipt_path %}<a href="{{ url_for('payments.historical_receipt',payment_id=audit_payment.id,event_id=event.id) }}">Download receipt for {% if event.revision == 0 %}legacy record{% else %}attempt {{ event.revision }}{% endif %}</a>{% endif %}
+</li>{% else %}<li>No submission attempts recorded. Payments predating audit support may have incomplete history.</li>{% endfor %}</ol>
+</section>

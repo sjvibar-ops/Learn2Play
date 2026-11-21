@@ -15,6 +15,7 @@
   {% include '_navbar.html' %}
 
   <!-- ===== Pending Verification Banner ===== -->
+  <p class="form-note" role="status">Manage Mentor and Coach applications in <a href="{{ url_for('main.settings') }}#roles">Settings · Roles &amp; access</a>.</p>
   {% if pending_provider_roles %}
   <div class="pending-verify-banner">
     <span class="pvb-icon">⏳</span>

@@ -1,0 +1,25 @@
+{% extends 'payments/base.html' %}{% block content %}<h1>{{ "Payment reconciliation" if reconciliation_mode else "Payment verification" }}</h1>
+<nav class="payment-filters"><a href="{{ url_for('payments.admin_payments') }}">Verification queue</a><a href="{{ url_for('payments.reconciliation_queue') }}">Booking-end reconciliation queue</a></nav>
+{% if reconciliation_mode %}<p>Records of external financial decisions only. This application does not process refunds.</p><nav class="payment-filters">{% for state in recon_states + ('ALL',) %}<a href="{{ url_for('payments.reconciliation_queue',state=state) }}" {% if state==recon_state %}aria-current="page"{% endif %}>{{ state }}</a>{% endfor %}</nav>{% endif %}
+<p class="payment-notice">Independently check the receiving bank or e-wallet records before approving. A screenshot alone does not establish receipt of funds.</p>
+<nav class="payment-filters" aria-label="Payment status">{% for s in ['SUBMITTED','PENDING','VERIFIED','REJECTED','ALL'] %}<a href="{{ url_for('payments.admin_payments',status=s) }}" {% if s==status %}aria-current="page"{% endif %}>{{ s }}</a>{% endfor %}</nav>
+{% for p in rows %}<article class="payment-card"><h2>{{ p.reference }}</h2><p>{{ p.student.display_name }} / {{ p.student.email }}</p>
+<p>Booking #{{ p.appointment_id }} / {{ p.appointment.topic }} / {{ p.appointment.status }}</p>
+<p>{{ p.appointment.provider.display_name }} / {{ format_dt(p.appointment.start_time) }} PHT / {{ p.appointment.duration_minutes }} minutes</p>
+<p>{{ p.appointment.currency }} {{ '%.2f'|format(p.amount) }} / <strong>{{ p.status }}</strong></p>
+<p>{{ p.method or 'Not submitted' }} / Transaction: {{ p.transaction_reference or 'Not submitted' }}</p>
+{% if p.submitted_at %}<p>Submitted {{ format_dt(p.submitted_at) }} PHT</p>{% endif %}
+{% if p.receipt_path %}<a href="{{ url_for('payments.receipt',payment_id=p.id) }}">Download receipt securely</a>{% endif %}
+{% if p.reviewer %}<p>Reviewed by {{ p.reviewer.display_name }} / {{ format_dt(p.reviewed_at) }} PHT</p>{% endif %}
+{% if p.rejection_reason %}<p>{{ p.rejection_reason }}</p>{% endif %}
+{% if duplicate_claims[p.id] %}<aside class="payment-notice" role="note"><strong>Possible duplicate transfer claim</strong>
+<p>The same payment method and normalized transaction reference appear on these payments. Check the receiving records and all claims before deciding.</p>
+<ul>{% for claim in duplicate_claims[p.id] %}<li><a href="{{ url_for('payments.admin_payments',payment_id=claim.id,status='ALL') }}">{{ claim.reference }}</a> / booking #{{ claim.appointment_id }} / {{ claim.student.display_name }} / {{ claim.status }}</li>{% endfor %}</ul>
+{% if p.id in blocked_ids %}<p><strong>Approval blocked.</strong> Reject incorrect submitted claims with a reason. A verified allocation remains reserved, including after booking cancellation.</p>{% else %}<p>Matching claims are rejected or not yet submitted; approval still requires independent verification of the receiving records.</p>{% endif %}</aside>{% endif %}
+{% if p.status == 'SUBMITTED' and p.appointment.status in ['pending','accepted','scheduled'] %}<form method="post" class="payment-review" data-id="{{ p.id }}">
+<label>Rejection reason (required to reject)<textarea name="reason" maxlength="500"></textarea></label>
+<label><input type="checkbox" name="confirmed"> I independently checked the receiving account records.</label>
+<button type="submit" value="approve" {% if p.id in blocked_ids %}disabled{% endif %}>Approve payment</button><button type="submit" value="reject">Reject payment</button></form>{% endif %}{% if p.appointment.status in ['pending','accepted','scheduled'] %}<form method="post" class="admin-booking-end" data-booking-id="{{ p.appointment_id }}"><label>Booking ending reason (visible to participants)<textarea name="reason" minlength="5" maxlength="500" required></textarea></label><button type="submit" value="cancel">Cancel booking</button>{% if p.appointment.status == 'pending' %}<button type="submit" value="reject">Reject booking</button>{% endif %}</form>{% endif %}{% set reconciliation_payment = p %}{% include 'payments/_reconciliation.html' %}{% set audit_payment = p %}{% include 'payments/_audit.html' %}</article>
+{% else %}<p>No payments in this status.</p>{% endfor %}
+<nav>{% if pagination.has_prev %}<a href="{{ url_for('payments.reconciliation_queue',state=recon_state,page=pagination.prev_num) if reconciliation_mode else url_for('payments.admin_payments',status=status,page=pagination.prev_num) }}">Previous</a>{% endif %}
+{% if pagination.has_next %}<a href="{{ url_for('payments.reconciliation_queue',state=recon_state,page=pagination.next_num) if reconciliation_mode else url_for('payments.admin_payments',status=status,page=pagination.next_num) }}">Next</a>{% endif %}</nav>{% endblock %}

@@ -72,27 +72,20 @@ def test_student_registration_and_duplicate_lookup(registration_app):
 
 
 @pytest.mark.parametrize("role", ["mentor", "coach"])
-def test_verified_registration_requires_proof_and_creates_pending_application(
-    registration_app, monkeypatch, role
-):
+def test_provider_registration_fields_cannot_grant_roles_or_create_applications(registration_app, monkeypatch, role):
     bucket = Mock()
     monkeypatch.setattr("routes.credentials_bucket", lambda: bucket)
     client = registration_app.test_client()
     data = registration_data(role)
-    response = client.post("/api/auth/register", data=data)
-    assert response.status_code == 400
-    assert response.json["field"] == "proofs"
-    bucket.upload.assert_not_called()
-
     data.update(bio="I have several years of relevant teaching and coaching experience.")
     data["proofs"] = (io.BytesIO(b"%PDF-1.4\n"), "proof.pdf")
     response = client.post("/api/auth/register", data=data)
     assert response.status_code == 201
-    assert response.json["pending"] is True
-    bucket.upload.assert_called_once()
+    assert response.json["pending"] is False
+    assert response.json["user"]["roles"] == ["student"]
+    bucket.upload.assert_not_called()
     with registration_app.app_context():
-        application = RoleApplication.query.one()
-        assert (application.role, application.status) == (role, "pending")
+        assert RoleApplication.query.count() == 0
 
 
 def test_package_error_handler_rolls_back_and_preserves_responses(monkeypatch):
@@ -126,7 +119,8 @@ def test_package_error_handler_rolls_back_and_preserves_responses(monkeypatch):
 def test_registration_notice_follows_role_changes(registration_app):
     response = registration_app.test_client().get("/register")
     assert response.status_code == 200
-    assert b'class="warning hidden" id="verificationNotice"' in response.data
+    assert b'id="providerNote"' in response.data
+    assert b'name="roles"' not in response.data
 
 
 def test_registration_notice_javascript():

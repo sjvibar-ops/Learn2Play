@@ -10,6 +10,8 @@
   <nav class="tb-nav" aria-label="Admin navigation">
     <a href="{{ url_for('main.admin_dashboard') }}"  {% if active_page == 'admin' %}class="active"{% endif %}>Dashboard</a>
     <a href="{{ url_for('main.admin_verification') }}" {% if active_page == 'verification' %}class="active"{% endif %}>Verification</a>
+    <a href="{{ url_for('payments.admin_payments') }}">Payments</a>
+    <a href="{{ url_for('main.admin_attendance') }}">Attendance disputes</a>
     <a href="{{ url_for('main.admin_reports_page') }}" {% if active_page == 'reports' %}class="active"{% endif %}>Reports</a>
     <a href="{{ url_for('main.admin_users') }}"      {% if active_page == 'users' %}class="active"{% endif %}>Users</a>
     <a href="{{ url_for('main.admin_settings') }}"   {% if active_page == 'admin_settings' %}class="active"{% endif %}>Settings</a>
@@ -19,9 +21,13 @@
   <!-- ===== REGULAR USER NAVBAR ===== -->
   <nav class="tb-nav" aria-label="Main navigation">
     <a href="{{ url_for('main.dashboard') }}" {% if active_page == 'dashboard' and request.args.get('view') != 'browse' %}class="active"{% endif %}>Dashboard</a>
+    {% if current_user.is_authenticated and "student" in current_user.roles %}<a href="{{ url_for('payments.history') }}">Payments</a>{% endif %}
     <a href="{{ url_for('main.dashboard', view='browse') }}" {% if active_page == 'dashboard' and request.args.get('view') == 'browse' %}class="active"{% endif %}>Browse educators</a>
     {% if current_user.is_authenticated and ('mentor' in current_user.roles or 'coach' in current_user.roles) %}
       <a data-show-for="mentor coach" href="{{ url_for('main.schedule') }}" {% if active_page == 'schedule' %}class="active"{% endif %}>Schedule</a>
+    {% endif %}
+    {% if current_user.is_authenticated and 'student' in current_user.roles %}
+      <a href="{{ url_for('main.leaderboard_page') }}" {% if active_page == 'leaderboard' %}class="active"{% endif %}>Leaderboard</a>
     {% endif %}
     <a href="{{ url_for('main.sessions') }}"  {% if active_page == 'sessions' %}class="active"{% endif %}>My Sessions</a>
     {% if current_user.is_authenticated %}

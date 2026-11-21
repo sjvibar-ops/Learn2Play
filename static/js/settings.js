@@ -103,8 +103,9 @@ function showSettingsToast(message, isError = false) {
             const path = button.dataset.applyPath;
             const choice = participation?.[path];
             if (!paths.includes(path) || !choice?.roles?.includes("learn") || choice.roles.includes("teach")) return;
-            const label = path === "academic" ? "Academic teaching" : "Gaming coaching";
-            showSettingsToast(`${label} applications aren’t connected yet. Admin review will be required.`);
+            document.dispatchEvent(new CustomEvent("l2:apply-provider", {
+                detail: {role: path === "academic" ? "mentor" : "coach"}
+            }));
         });
     });
 
@@ -433,3 +434,486 @@ document.getElementById("deleteAccountBtn")?.addEventListener("click", () => {
         showSettingsToast("Account deletion in progress...", true);
     }
 });
+
+// ---------- 9. Roles & Access: Mentor / Coach applications (Batch 2.2A-1 status + 2.2A-2 submission) ----------
+(function initRoleApplications() {
+    const list = document.getElementById("roleApplicationsList");
+    const messageEl = document.getElementById("roleApplicationsMessage");
+    const retryBtn = document.getElementById("roleApplicationsRetry");
+    const rolesTabBtn = document.querySelector('.settings-tab-btn[data-tab="roles"]');
+    if (!list || !rolesTabBtn) return;
+
+    const ROLE_META = {
+        mentor: { title: "Academic Teacher (Mentor)", iconClass: "role-mentor-icon" },
+        coach: { title: "Gaming Coach", iconClass: "role-coach-icon" }
+    };
+    const STATUS_META = {
+        not_submitted: { label: "Not submitted", cls: "inactive", hint: "You have not applied for this role yet." },
+        pending: { label: "Pending review", cls: "pending", hint: "Your application is being reviewed by our team." },
+        approved: { label: "Approved", cls: "active", hint: "This role is active on your account." },
+        rejected: { label: "Rejected", cls: "rejected", hint: "Your application was not approved." },
+        revision_required: { label: "Revision required", cls: "revision", hint: "Please update your application based on the review notes." }
+    };
+    const NOTE_STATUSES = ["rejected", "revision_required"];
+    // Used only until the first GET response supplies the real limits.
+    const FALLBACK_LIMITS = {
+        experience_min_length: 50, experience_max_length: 1500, max_links: 5,
+        max_files: 5, max_file_bytes: 5 * 1024 * 1024, allowed_file_types: ["pdf", "jpg", "jpeg", "png"]
+    };
+    const LINK_PATTERN = /^https?:\/\/\S+\.\S+$/i;
+    const MAX_LINK_LENGTH = 300; // mirrors the server; the server remains authoritative
+
+    let requestSeq = 0;
+    let limits = Object.assign({}, FALLBACK_LIMITS);
+    const apps = {};          // latest application data per role
+    const openForms = {};     // role -> { form, submitting }
+    const notices = {};       // role -> { text, isError } shown inside the card
+
+    function setMessage(text, isError) {
+        if (!messageEl) return;
+        messageEl.textContent = text || "";
+        messageEl.classList.toggle("error", Boolean(text) && Boolean(isError));
+    }
+
+    function el(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined && text !== null) node.textContent = String(text);
+        return node;
+    }
+
+    function formatDate(iso) {
+        if (!iso) return "";
+        const d = new Date(iso);
+        return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    }
+
+    // Filenames are user-supplied: always rendered through textContent, never innerHTML.
+    function safeFilename(name) {
+        const text = typeof name === "string" ? name.replace(/[\u0000-\u001f\u007f]/g, "").trim() : "";
+        return text || "Unnamed file";
+    }
+
+    function formatBytes(bytes) {
+        if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(bytes % (1024 * 1024) === 0 ? 0 : 1) + " MiB";
+        if (bytes >= 1024) return Math.round(bytes / 1024) + " KiB";
+        return bytes + " B";
+    }
+
+    function allowedExtensions() {
+        const types = Array.isArray(limits.allowed_file_types) && limits.allowed_file_types.length
+            ? limits.allowed_file_types : FALLBACK_LIMITS.allowed_file_types;
+        return types.map(t => String(t).replace(/^\./, "").toLowerCase());
+    }
+
+    function fileExtension(name) {
+        const idx = name.lastIndexOf(".");
+        return idx === -1 ? "" : name.slice(idx + 1).toLowerCase();
+    }
+
+    // ----- Application form (one per role, independent) -----
+    function buildForm(role, app) {
+        const status = app ? app.status : "not_submitted";
+        const existingCount = app && Array.isArray(app.credentials) ? app.credentials.length : 0;
+        const remainingFiles = Math.max(limits.max_files - existingCount, 0);
+        const isResubmit = NOTE_STATUSES.includes(status);
+
+        const form = el("form", "role-app-form");
+        form.noValidate = true;
+        form.setAttribute("aria-label", (isResubmit ? "Resubmit " : "Apply as ") + ROLE_META[role].title);
+
+        // Experience description (required)
+        const descId = "roleAppDesc-" + role;
+        const descField = el("div", "role-app-field");
+        const descLabel = el("label", null, "Experience description (required)");
+        descLabel.htmlFor = descId;
+        const desc = el("textarea", "role-app-textarea");
+        desc.id = descId;
+        desc.name = "experience_description";
+        desc.rows = 6;
+        desc.maxLength = limits.experience_max_length;
+        desc.value = app && typeof app.experience_description === "string" ? app.experience_description : "";
+        const descCount = el("div", "role-app-help");
+        const descErr = el("div", "role-app-field-error");
+        descErr.setAttribute("role", "alert");
+        function updateCount() {
+            descCount.textContent = desc.value.trim().length + " / " + limits.experience_max_length +
+                " characters (minimum " + limits.experience_min_length + ")";
+        }
+        desc.addEventListener("input", updateCount);
+        updateCount();
+        descField.append(descLabel, desc, descCount, descErr);
+
+        // Supporting links (optional)
+        const linksId = "roleAppLinks-" + role;
+        const linksField = el("div", "role-app-field");
+        const linksLabel = el("label", null, "Supporting links (optional)");
+        linksLabel.htmlFor = linksId;
+        const links = el("textarea", "role-app-textarea");
+        links.id = linksId;
+        links.name = "links";
+        links.rows = 3;
+        links.placeholder = "https://example.com/profile";
+        links.value = app && Array.isArray(app.links) ? app.links.join("\n") : "";
+        const linksHelp = el("div", "role-app-help",
+            "One link per line, starting with http:// or https:// (up to " + limits.max_links + ").");
+        const linksErr = el("div", "role-app-field-error");
+        linksErr.setAttribute("role", "alert");
+        linksField.append(linksLabel, links, linksHelp, linksErr);
+
+        // Evidence files (optional)
+        const filesId = "roleAppFiles-" + role;
+        const filesField = el("div", "role-app-field");
+        const filesLabel = el("label", null, "Supporting evidence files (optional)");
+        filesLabel.htmlFor = filesId;
+        const files = el("input", "role-app-file");
+        files.type = "file";
+        files.id = filesId;
+        files.name = "proofs";
+        files.multiple = true;
+        files.accept = allowedExtensions().map(e => "." + e).join(",");
+        files.disabled = remainingFiles === 0;
+        const filesHelp = el("div", "role-app-help",
+            allowedExtensions().map(e => e.toUpperCase()).join(", ") + " only, up to " + formatBytes(limits.max_file_bytes) +
+            " each. " + (existingCount
+                ? "This application already has " + existingCount + " file(s) (your earlier files are kept and are not re-uploaded); you can add " + remainingFiles + " more."
+                : "You can add up to " + remainingFiles + " file(s)."));
+        const fileList = el("ul", "role-app-selected-files");
+        const filesErr = el("div", "role-app-field-error");
+        filesErr.setAttribute("role", "alert");
+        files.addEventListener("change", () => {
+            fileList.replaceChildren();
+            Array.from(files.files).forEach(f => {
+                fileList.appendChild(el("li", null, safeFilename(f.name) + " (" + formatBytes(f.size) + ")"));
+            });
+            filesErr.textContent = "";
+        });
+        filesField.append(filesLabel, files, filesHelp, fileList, filesErr);
+
+        // Form-level status + buttons
+        const formMsg = el("div", "role-app-form-message");
+        formMsg.setAttribute("role", "status");
+        formMsg.setAttribute("aria-live", "polite");
+        const actions = el("div", "role-app-form-actions");
+        const submitBtn = el("button", "view-btn role-app-submit", isResubmit ? "Resubmit application" : "Submit application");
+        submitBtn.type = "submit";
+        const cancelBtn = el("button", "view-btn role-app-cancel", "Cancel");
+        cancelBtn.type = "button";
+        actions.append(submitBtn, cancelBtn);
+
+        form.append(descField, linksField, filesField, formMsg, actions);
+
+        const ctx = { role, form, desc, links, files, descErr, linksErr, filesErr, formMsg, submitBtn, cancelBtn, remainingFiles, submitting: false };
+
+        cancelBtn.addEventListener("click", () => {
+            if (ctx.submitting) return;
+            closeForm(role); // nothing is sent
+        });
+        form.addEventListener("submit", event => {
+            event.preventDefault();
+            submitApplication(ctx);
+        });
+        return ctx;
+    }
+
+    function setSubmitting(ctx, on) {
+        ctx.submitting = on;
+        ctx.submitBtn.disabled = on;
+        ctx.cancelBtn.disabled = on;
+        ctx.desc.disabled = on;
+        ctx.links.disabled = on;
+        ctx.files.disabled = on || ctx.remainingFiles === 0;
+        ctx.form.setAttribute("aria-busy", on ? "true" : "false");
+        ctx.submitBtn.textContent = on ? "Submitting…" : ctx.submitBtn.dataset.label;
+    }
+
+    function clearFieldErrors(ctx) {
+        ctx.descErr.textContent = "";
+        ctx.linksErr.textContent = "";
+        ctx.filesErr.textContent = "";
+        ctx.formMsg.textContent = "";
+        ctx.formMsg.classList.remove("error", "success");
+    }
+
+    function showFormError(ctx, message, field) {
+        const target = { experience_description: ctx.descErr, links: ctx.linksErr, proofs: ctx.filesErr }[field];
+        if (target) {
+            target.textContent = message;
+        } else {
+            ctx.formMsg.textContent = message;
+            ctx.formMsg.classList.add("error");
+        }
+    }
+
+    // Returns { description, linkList, fileList } or null after showing the first problem.
+    function validateForm(ctx) {
+        clearFieldErrors(ctx);
+        let ok = true;
+        const description = ctx.desc.value.trim();
+        if (description.length < limits.experience_min_length || description.length > limits.experience_max_length) {
+            ctx.descErr.textContent = "Describe your experience in " + limits.experience_min_length + " to " +
+                limits.experience_max_length + " characters (currently " + description.length + ").";
+            ok = false;
+        }
+
+        const linkList = ctx.links.value.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        if (linkList.length > limits.max_links) {
+            ctx.linksErr.textContent = "You can add up to " + limits.max_links + " links.";
+            ok = false;
+        } else if (linkList.some(l => !LINK_PATTERN.test(l) || l.length > MAX_LINK_LENGTH)) {
+            ctx.linksErr.textContent = "Each link must start with http:// or https:// and be at most " + MAX_LINK_LENGTH + " characters.";
+            ok = false;
+        }
+
+        const fileList = Array.from(ctx.files.files);
+        const exts = allowedExtensions();
+        let fileProblem = "";
+        if (fileList.length > ctx.remainingFiles) {
+            fileProblem = "You can add " + ctx.remainingFiles + " more file(s) to this application.";
+        } else {
+            const bad = fileList.find(f => !exts.includes(fileExtension(f.name)));
+            const big = fileList.find(f => f.size > limits.max_file_bytes);
+            const empty = fileList.find(f => f.size === 0);
+            if (bad) fileProblem = safeFilename(bad.name) + ": only " + exts.map(e => e.toUpperCase()).join(", ") + " files are allowed.";
+            else if (big) fileProblem = safeFilename(big.name) + " is larger than " + formatBytes(limits.max_file_bytes) + ".";
+            else if (empty) fileProblem = safeFilename(empty.name) + " is empty.";
+        }
+        if (fileProblem) {
+            ctx.filesErr.textContent = fileProblem;
+            ok = false;
+        }
+        return ok ? { description, linkList, fileList } : null;
+    }
+
+    async function fetchCsrfToken() {
+        const response = await fetch("/api/csrf-token", { credentials: "same-origin", headers: { "Accept": "application/json" } });
+        const data = await response.json();
+        if (!response.ok || !data || !data.csrf_token) throw new Error("csrf");
+        return data.csrf_token;
+    }
+
+    async function submitApplication(ctx) {
+        if (ctx.submitting) return;
+        const values = validateForm(ctx);
+        if (!values) return;
+
+        setSubmitting(ctx, true);
+        const { role } = ctx;
+        try {
+            let token;
+            try {
+                token = await fetchCsrfToken();
+            } catch (err) {
+                showFormError(ctx, "Could not verify your session. Please refresh the page and try again.");
+                setSubmitting(ctx, false);
+                return;
+            }
+
+            const body = new FormData();
+            body.append("experience_description", values.description);
+            values.linkList.forEach(link => body.append("links", link));
+            values.fileList.forEach(file => body.append("proofs", file, file.name));
+
+            // Content-Type is intentionally not set: the browser adds the multipart boundary.
+            const response = await fetch("/api/me/applications/" + encodeURIComponent(role), {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "X-CSRFToken": token, "Accept": "application/json" },
+                body
+            });
+
+            let data = null;
+            try { data = await response.json(); } catch (err) { data = null; }
+            const serverMessage = data && typeof data.message === "string" ? data.message : "";
+
+            if (response.ok && data && data.ok === true) {
+                notices[role] = { text: serverMessage || "Your application was submitted for review.", isError: false };
+                closeForm(role, true);
+                showSettingsToast(notices[role].text);
+                await loadApplications({ force: true, keepNotices: true });
+                return;
+            }
+
+            if (response.status === 409) {
+                // State changed elsewhere (already pending/approved): show it and reload the real state.
+                notices[role] = { text: serverMessage || "This application can no longer be changed. Its status has been refreshed.", isError: true };
+                closeForm(role, true);
+                await loadApplications({ force: true, keepNotices: true });
+                return;
+            }
+
+            showFormError(ctx, serverMessage || "We couldn't submit your application. Please try again.", data && data.field);
+            setSubmitting(ctx, false);
+        } catch (err) {
+            showFormError(ctx, "Network problem: your application was not confirmed. Please check your connection and try again.");
+            setSubmitting(ctx, false);
+        }
+    }
+
+    function openForm(role) {
+        const card = document.getElementById("roleApp-" + role);
+        const app = apps[role];
+        if (!card || !app || app.can_submit !== true) return;
+        if (openForms[role]) {
+            openForms[role].desc.focus();
+            return;
+        }
+        delete notices[role];
+        const ctx = buildForm(role, app);
+        ctx.submitBtn.dataset.label = ctx.submitBtn.textContent;
+        openForms[role] = ctx;
+        renderCard(card, role, app);
+        ctx.desc.focus();
+    }
+
+    function closeForm(role, skipRender) {
+        delete openForms[role];
+        if (skipRender) return;
+        const card = document.getElementById("roleApp-" + role);
+        if (card && apps[role]) renderCard(card, role, apps[role]);
+    }
+
+    // ----- Cards -----
+    function renderCard(card, role, app) {
+        const meta = ROLE_META[role];
+        const known = app && Object.prototype.hasOwnProperty.call(STATUS_META, app.status);
+        const status = known ? app.status : "not_submitted";
+        const sMeta = STATUS_META[status];
+        const formCtx = openForms[role];
+        card.replaceChildren();
+
+        const icon = el("div", "role-icon-avatar " + meta.iconClass);
+        icon.setAttribute("aria-hidden", "true");
+        icon.textContent = role === "mentor" ? "T" : "C";
+
+        const info = el("div", "role-info");
+        info.appendChild(el("h3", null, meta.title));
+        info.appendChild(el("p", null, sMeta.hint));
+
+        const submittedAt = app ? formatDate(app.submitted_at) : "";
+        const reviewedAt = app ? formatDate(app.reviewed_at) : "";
+        if (submittedAt || reviewedAt) {
+            const dates = [];
+            if (submittedAt) dates.push("Submitted " + submittedAt);
+            if (reviewedAt) dates.push("Reviewed " + reviewedAt);
+            info.appendChild(el("p", "role-app-dates", dates.join(" · ")));
+        }
+
+        const notice = notices[role];
+        if (notice) {
+            const n = el("div", "role-app-notice " + (notice.isError ? "error" : "success"), notice.text);
+            n.setAttribute("role", notice.isError ? "alert" : "status");
+            info.appendChild(n);
+        }
+
+        if (app && NOTE_STATUSES.includes(status) && app.review_note) {
+            const note = el("div", "role-app-note");
+            note.appendChild(el("strong", null, "Reviewer notes"));
+            note.appendChild(el("p", null, app.review_note));
+            info.appendChild(note);
+        }
+
+        const creds = app && Array.isArray(app.credentials) ? app.credentials : [];
+        if (creds.length) {
+            const filesBox = el("div", "role-app-files");
+            filesBox.appendChild(el("strong", null, "Submitted evidence"));
+            const ul = el("ul");
+            creds.forEach(c => ul.appendChild(el("li", null, safeFilename(c && c.name))));
+            filesBox.appendChild(ul);
+            info.appendChild(filesBox);
+        }
+
+        const side = el("div", "role-app-side");
+        side.appendChild(el("span", "role-badge " + sMeta.cls, sMeta.label));
+
+        if (app && app.can_submit === true) {
+            const verb = NOTE_STATUSES.includes(status) ? "Resubmit" : "Apply";
+            const btn = el("button", "view-btn role-app-action", verb);
+            btn.type = "button";
+            btn.setAttribute("aria-expanded", formCtx ? "true" : "false");
+            btn.setAttribute("aria-controls", "roleAppForm-" + role);
+            btn.disabled = Boolean(formCtx);
+            btn.addEventListener("click", () => openForm(role));
+            side.appendChild(btn);
+        }
+
+        card.appendChild(icon);
+        card.appendChild(info);
+        card.appendChild(side);
+        if (formCtx) {
+            formCtx.form.id = "roleAppForm-" + role;
+            card.appendChild(formCtx.form);
+        }
+    }
+
+    function renderLoading() {
+        list.setAttribute("aria-busy", "true");
+        list.querySelectorAll(".role-app-card").forEach(card => {
+            const role = card.dataset.appRole;
+            if (openForms[role]) return; // never wipe a form the user is filling in
+            card.replaceChildren(el("p", "role-app-loading", "Loading " + ROLE_META[role].title + " status…"));
+        });
+    }
+
+    function renderError() {
+        list.setAttribute("aria-busy", "false");
+        list.querySelectorAll(".role-app-card").forEach(card => {
+            if (!openForms[card.dataset.appRole]) card.replaceChildren();
+        });
+        setMessage("Could not load your application status. Please try again.", true);
+        if (retryBtn) retryBtn.hidden = false;
+    }
+
+    // options.force: also rebuild cards that have an open form (used after submit / 409).
+    // options.keepNotices: keep inline success/error notices (otherwise cleared on a fresh tab open).
+    async function loadApplications(options) {
+        const opts = options || {};
+        const seq = ++requestSeq;
+        setMessage("");
+        if (!opts.keepNotices) Object.keys(notices).forEach(k => delete notices[k]);
+        if (retryBtn) retryBtn.hidden = true;
+        renderLoading();
+        try {
+            const response = await fetch("/api/me/applications", {
+                credentials: "same-origin",
+                headers: { "Accept": "application/json" }
+            });
+            if (!response.ok) throw new Error("HTTP " + response.status);
+            const data = await response.json();
+            if (seq !== requestSeq) return; // a newer request superseded this one
+            if (!data || data.ok !== true || !data.applications) throw new Error("Unexpected response");
+            if (data.limits && typeof data.limits === "object") {
+                limits = Object.assign({}, FALLBACK_LIMITS, data.limits);
+            }
+            list.querySelectorAll(".role-app-card").forEach(card => {
+                const role = card.dataset.appRole;
+                apps[role] = data.applications[role];
+                const stillSubmittable = apps[role] && apps[role].can_submit === true;
+                if (openForms[role]) {
+                    // A plain refresh keeps a form the user is filling in; force or a lost right to submit closes it.
+                    if (opts.force || !stillSubmittable) delete openForms[role];
+                    else return;
+                }
+                renderCard(card, role, apps[role]);
+            });
+            list.setAttribute("aria-busy", "false");
+        } catch (err) {
+            if (seq !== requestSeq) return;
+            renderError();
+        }
+    }
+
+    document.addEventListener("l2:apply-provider", async event => {
+        const role = event.detail?.role;
+        if (!Object.prototype.hasOwnProperty.call(ROLE_META, role)) return;
+        await loadApplications();
+        openForm(role);
+    });
+    rolesTabBtn.addEventListener("click", () => loadApplications());
+    retryBtn?.addEventListener("click", () => loadApplications());
+
+    // Roles tab already active on page load (e.g. settings#roles)
+    if (document.getElementById("tab-roles")?.classList.contains("active")) {
+        loadApplications();
+    }
+})();

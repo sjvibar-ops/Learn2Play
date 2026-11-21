@@ -1,4 +1,5 @@
-from flask import Flask
+from flask import Flask, request
+from werkzeug.exceptions import RequestEntityTooLarge
 
 if __package__:
     from .config import Config
@@ -17,6 +18,18 @@ def create_app(config_overrides=None):
     app.config.from_object(Config)
     if config_overrides is not None:
         app.config.update(config_overrides)
+
+    @app.before_request
+    def enforce_request_limits():
+        # Register before CSRF: CSRF itself may parse request.form.
+        if request.endpoint == "payments.submit":
+            request.max_content_length = min(
+                app.config["PAYMENT_REQUEST_MAX_BYTES"],
+                app.config["MAX_CONTENT_LENGTH"],
+            )
+        limit = request.max_content_length
+        if limit is not None and request.content_length is not None and request.content_length > limit:
+            raise RequestEntityTooLarge()
 
     # Initialize extensions
     db.init_app(app)
@@ -47,6 +60,11 @@ def create_app(config_overrides=None):
     else:
         from routes import main
     app.register_blueprint(main)
+    if __package__:
+        from .payments import payments
+    else:
+        from payments import payments
+    app.register_blueprint(payments)
 
     register_error_handlers(app)
 

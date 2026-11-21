@@ -25,7 +25,7 @@
     });
 
     document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") closeMenu(true);
+        if (event.key === "Escape" && !dropdown.classList.contains("hidden")) closeMenu(true);
     });
 
     const logoutButton = document.getElementById("logoutBtn");

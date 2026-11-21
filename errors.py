@@ -25,6 +25,13 @@ def register_error_handlers(app):
             return jsonify(ok=False, message=message), 400
         return render_template("errors/400.html", message=message), 400
 
+    @app.errorhandler(413)
+    def request_too_large(error):
+        message = "Request is too large. Receipt files must be at most 5 MB (6 MB including form data). Other requests allow up to 32 MB."
+        if wants_json():
+            return jsonify(ok=False, message=message), 413
+        return render_template("errors/400.html", message=message, code=413, heading="Request too large"), 413
+
     @app.errorhandler(400)
     def bad_request(error):
         message = "The request is invalid."

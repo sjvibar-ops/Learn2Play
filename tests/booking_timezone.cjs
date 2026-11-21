@@ -148,7 +148,26 @@ async function checkJoinVisibilityAroundStartAndEnd() {
   }
 }
 
+async function checkEndedBookingMessages() {
+  for (const status of ["cancelled", "rejected"]) {
+    const ended = {...booking(92, "2026-11-15T16:00:00Z", status),
+      payment_satisfied:false, payment_status:"SUBMITTED", reconciliation_state:"NEEDS_REVIEW",
+      payment_url:"/payments/bookings/92", provider_confirmed:true, duration:60};
+    const page = loadDashboard("sessions.js", "2026-11-16T16:00:00Z", [ended],
+      ["sessionList", "mentorUpcomingList"]);
+    page.get("sessionList").querySelectorAll = () => [];
+    await new Promise(resolve => setImmediate(resolve));
+    const html = page.get("sessionList").innerHTML;
+    assert.match(html, /Booking ended\. Attendance confirmation and XP are unavailable/);
+    assert.match(html, /Booking-end reconciliation: NEEDS_REVIEW/);
+    assert.match(html, /No refund is implied/);
+    assert.doesNotMatch(html, /please confirm attendance|join-session|cancel-booking|data-action="confirm-attendance"/);
+    assert.doesNotMatch(page.get("mentorUpcomingList").innerHTML, /join-session|data-action="complete"/);
+  }
+}
+
 (async () => {
+  await checkEndedBookingMessages();
   await checkSessionFilters();
   await checkJoinVisibilityAroundStartAndEnd();
   await checkEducatorNextSession();

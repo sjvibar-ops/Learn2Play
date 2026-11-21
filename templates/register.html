@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>Learn2Play — Create your account</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
 </head>
@@ -17,49 +17,23 @@
     </header>
 
     <h1>Create your account</h1>
-    <p class="sub">Enable one or both paths, then choose how you want to participate.</p>
+    <p class="sub">Create a free student account in a minute. No certificates or documents are needed to sign up.</p>
+    <p class="step-note" id="providerNote">Want to teach or coach? Once your account is created, you can apply to become a Mentor (Teacher), a Coach, or both from your account. Supporting evidence such as certificates is optional, and an administrator reviews each application.</p>
 
     <form id="regForm" novalidate enctype="multipart/form-data">
 
-      <!-- 1. Paths and participation -->
-      <fieldset class="reg-step roles" id="rolesField">
-        <legend><span class="step-no">1</span>Choose your paths and roles <small>(enable one or both)</small></legend>
+      <fieldset class="reg-step">
+        <legend>Learning paths <small>(optional browser preferences)</small></legend>
         <div class="reg-path-grid">
-          <section class="reg-path-card" id="academicPathCard">
-            <label class="reg-path-select" for="academicPath">
-              <input type="checkbox" id="academicPath" value="academic">
-              <span><b>Academic</b><small>Start using the academic path now</small></span>
-            </label>
-            <div class="reg-participation" id="academicParticipation">
-              <span class="reg-participation-label">Choose at least one role. This choice is fixed after signup.</span>
-              <label class="reg-path-option"><input type="checkbox" id="academicLearn" value="learn"><span><b>Learn</b><small>Find academic support</small></span></label>
-              <label class="reg-path-option"><input type="checkbox" id="academicTeach" value="teach"><span><b>Teach</b><small>Offer academic teaching</small></span></label>
-            </div>
-          </section>
-          <section class="reg-path-card" id="gamingPathCard">
-            <label class="reg-path-select" for="gamingPath">
-              <input type="checkbox" id="gamingPath" value="gaming">
-              <span><b>Gaming</b><small>Start using the gaming path now</small></span>
-            </label>
-            <div class="reg-participation" id="gamingParticipation">
-              <span class="reg-participation-label">Choose at least one role. This choice is fixed after signup.</span>
-              <label class="reg-path-option"><input type="checkbox" id="gamingLearn" value="learn"><span><b>Learn</b><small>Find a gaming coach</small></span></label>
-              <label class="reg-path-option"><input type="checkbox" id="gamingTeach" value="teach"><span><b>Teach</b><small>Offer gaming coaching</small></span></label>
-            </div>
-          </section>
+          <label class="reg-path-select" for="academicPath"><input type="checkbox" id="academicPath"><span><b>Academic</b><small>Find academic support</small></span></label>
+          <label class="reg-path-select" for="gamingPath"><input type="checkbox" id="gamingPath"><span><b>Gaming</b><small>Find a gaming coach</small></span></label>
         </div>
-        <p class="reg-path-note">Choose Learn, Teach, or both for each enabled path. Your path preferences are saved in this browser. Teaching and coaching require admin approval.</p>
-        <div hidden aria-hidden="true">
-          <input type="checkbox" name="roles" value="student">
-          <input type="checkbox" name="roles" value="mentor">
-          <input type="checkbox" name="roles" value="coach">
-        </div>
-        <p class="field-error" data-for="roles"></p>
+        <p class="reg-path-note">These preferences are saved in this browser. Your account starts as a student. Apply to teach or coach separately in Settings.</p>
       </fieldset>
 
-      <!-- 2. Account -->
+      <!-- 1. Account -->
       <fieldset class="reg-step">
-        <legend><span class="step-no">2</span>Your account</legend>
+        <legend><span class="step-no">1</span>Your account</legend>
         <label class="r-field">Full name
           <input type="text" id="name" name="name" autocomplete="name" maxlength="80" placeholder="e.g. Maria Santos">
           <p class="field-error" data-for="name"></p>
@@ -94,45 +68,16 @@
         </div>
       </fieldset>
 
-      <!-- 3. Credentials (teacher / coach only) -->
-      <fieldset class="reg-step hidden" id="credsField">
-        <legend><span class="step-no">3</span>Credentials &amp; achievements</legend>
-        <p class="step-note" id="credentialsNote">Teaching services are reviewed by an administrator before they can be published.</p>
-
-        <div class="r-field">
-          <span id="proofLabel">Proof of qualifications</span>
-          <label class="dropzone" id="dropzone" for="proofs">
-            <b>Choose files</b> or drop them here
-            <small>Certificates, licenses, diplomas or awards. PDF, JPG or PNG, up to 5 MB each, max 5 files.</small>
-          </label>
-          <input type="file" id="proofs" name="proofs" multiple accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" aria-labelledby="proofLabel" class="sr-only">
-          <ul class="file-list" id="fileList"></ul>
-          <p class="field-error" data-for="proofs"></p>
-        </div>
-
-        <label class="r-field">Experience and qualifications
-          <textarea id="bio" name="bio" rows="5" maxlength="1500" placeholder="What do you teach or coach, for how long, and what have you achieved?"></textarea>
-          <small><span id="bioCount">0</span>/1500 &middot; at least 50 characters</small>
-          <p class="field-error" data-for="bio"></p>
-        </label>
-
-        <label class="r-field">Portfolio or reference links <em>(optional)</em>
-          <textarea id="links" name="links" rows="3" placeholder="One link per line, e.g. https://your-profile.example.com"></textarea>
-          <small>Up to 5 links, starting with http:// or https://</small>
-          <p class="field-error" data-for="links"></p>
-        </label>
-      </fieldset>
-
-      <!-- 4. Review -->
+      <!-- 2. Review -->
       <fieldset class="reg-step">
-        <legend><span class="step-no" id="reviewNo">3</span>Review &amp; submit</legend>
-        <div class="warning hidden" id="verificationNotice" role="note">
-          ⚠️ Your registration will be reviewed by our administrators. The credentials and proof you provide will be verified for qualification. Accounts with unqualified or falsified credentials may be rejected or removed.
+        <legend><span class="step-no">2</span>Review &amp; submit</legend>
+        <div class="warning" role="note">
+          ℹ️ You will start as a Student. If you later apply to be a Mentor or Coach, an administrator will review your application, and that role only becomes active once it is approved. Accounts with falsified information may be rejected or removed.
         </div>
         <label class="ack">
           <input type="checkbox" id="ack" name="acknowledged" value="true">
           <span class="box"><svg viewBox="0 0 24 24"><path d="M4.5 12.5l5 5 10-11"/></svg></span>
-          I understand and confirm that everything I submit is accurate.
+          I understand and confirm that the information I provide is accurate.
         </label>
         <p class="field-error" data-for="ack"></p>
 

@@ -103,9 +103,11 @@ async function loadUserData() {
         if (statMentors) statMentors.textContent = user.stats?.mentors_count ?? 0;
         if (statHours) statHours.textContent = user.stats?.hours_count ?? 0;
         if (statRating) {
-            statRating.textContent = user.stats?.avg_rating && user.stats.avg_rating > 0 
-                ? user.stats.avg_rating.toFixed(1) 
+            const avgRating = Number(user.stats?.avg_rating);
+            statRating.textContent = user.stats?.avg_rating != null && Number.isFinite(avgRating) && avgRating > 0 && avgRating <= 5
+                ? avgRating.toFixed(1)
                 : "—";
+            statRating.title = statRating.textContent === "—" ? "No ratings yet" : "";
         }
 
         // Topics
@@ -470,9 +472,10 @@ function updateBioCount() {
 
     if (!menu || !avatar || !dropdown) return;
 
-    function closeMenu() {
+    function closeMenu(returnFocus = false) {
         dropdown.classList.add("hidden");
         avatar.setAttribute("aria-expanded", "false");
+        if (returnFocus) avatar.focus();
     }
 
     avatar.addEventListener("click", (e) => {
@@ -487,7 +490,7 @@ function updateBioCount() {
     });
 
     document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") closeMenu();
+        if (e.key === "Escape" && !dropdown.classList.contains("hidden")) closeMenu(true);
     });
 
     if (logoutBtn) {

@@ -1,0 +1,24 @@
+{% extends 'payments/base.html' %}{% block content %}
+<a href="{{ url_for('payments.history') }}">Payment history</a><h1>Session payment</h1>
+{% set a = payment.appointment %}<section class="payment-card"><h2>{{ a.topic }}</h2>
+<p>{{ a.provider.display_name }} / {{ format_dt(a.start_time) }} PHT / {{ a.duration_minutes }} minutes</p>
+<p>Booking #{{ a.id }}: {{ a.status }}</p><p>Reference: <strong>{{ payment.reference }}</strong></p>
+<h2>{{ a.currency }} {{ '%.2f'|format(payment.amount) }}</h2><p>Status: <strong>{{ payment.status }}</strong></p>
+{% if payment.rejection_reason %}<p role="alert">Rejected: {{ payment.rejection_reason }}</p>{% endif %}
+{% if payment.submitted_at %}<p>Submitted: {{ format_dt(payment.submitted_at) }} PHT</p>{% endif %}
+{% if payment.reviewed_at %}<p>Reviewed: {{ format_dt(payment.reviewed_at) }} PHT</p>{% endif %}
+{% if payment.receipt_path %}<a href="{{ url_for('payments.receipt',payment_id=payment.id) }}">Download your receipt</a>{% endif %}</section>
+<section class="payment-card"><h2>QR payment instructions</h2>
+{% if config.PAYMENT_DEMO %}<p class="payment-notice"><strong>DEMO / TEST ONLY: do not send real funds.</strong> No merchant account is connected.</p>{% endif %}
+{% if config.PAYMENT_QR_URL %}<img class="payment-qr" src="{{ config.PAYMENT_QR_URL }}" alt="Configured Learn2Play payment QR code">{% else %}<div class="payment-placeholder">DEMO QR PLACEHOLDER<br>No scannable payment QR configured.</div>{% endif %}
+<p>{{ config.PAYMENT_INSTRUCTIONS }}</p><p>Use reference {{ payment.reference }} where supported. A receipt does not confirm receipt of funds. An admin must independently verify your transaction.</p></section>
+{% if payment.status in ['PENDING','REJECTED'] and a.status in active %}
+<form method="post" class="payment-card" id="paymentSubmission" action="{{ url_for('payments.submit', booking_id=a.id) }}" enctype="multipart/form-data">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><h2>{{ 'Resubmit payment proof' if payment.status == 'REJECTED' else 'Submit payment proof' }}</h2>
+<label>Payment method<select name="method" required>{% for method in methods %}<option>{{ method }}</option>{% endfor %}</select></label>
+<label>Transaction reference<input name="transaction_reference" minlength="4" maxlength="120" required></label>
+<label>Receipt image (PNG or JPEG, maximum 5 MB; static images only, up to 8192 pixels per side and 16 million pixels total)<input type="file" name="receipt" accept="image/png,image/jpeg" required></label>
+<button type="submit">Submit for manual review</button></form>
+{% elif payment.status == 'SUBMITTED' %}<p>Your proof is awaiting manual review. Your payment is not yet verified. Duplicate submissions are disabled.</p>{% endif %}
+{% set reconciliation_payment = payment %}{% include 'payments/_reconciliation.html' %}{% set audit_payment = payment %}{% include 'payments/_audit.html' %}
+{% endblock %}

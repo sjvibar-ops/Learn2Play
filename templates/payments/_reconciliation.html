@@ -1,0 +1,30 @@
+{% set r = reconciliation_payment %}
+<section class="payment-reconciliation" aria-label="Booking-end payment reconciliation">
+<h3>Booking-end reconciliation: {{ r.reconciliation_state }}</h3>
+<p>This is separate from payment verification. No money is moved by this application.</p>
+{% if r.appointment.status in ['cancelled','rejected'] %}
+<p>Booking {{ r.appointment.status }}{% if r.appointment.ended_at %} / {{ format_dt(r.appointment.ended_at) }} PHT{% else %} / ending time unavailable for this legacy booking{% endif %}.</p>
+{% if r.appointment.ending_reason %}<p>Booking ending reason: {{ r.appointment.ending_reason }}</p>{% endif %}
+{% endif %}
+<p>{{ r.reconciliation_explanation or 'No booking-end reconciliation is currently required. Payment verification and booking status are handled separately.' }}</p>
+{% if r.reconciliation_state in ['NEEDS_REVIEW','REFUND_PENDING'] %}<p>Further review or external confirmation is pending.</p>{% endif %}
+{% if current_user.is_admin and r.appointment.status in ['cancelled','rejected'] %}
+<p class="payment-notice"><strong>Confirmation recording only.</strong> Admin access does not establish account ownership or authority over funds. Obtain actual external authorization/confirmation from the responsible account holder or decision-maker. This form records your attestation; the application cannot authenticate that external person. Use demo confirmations for prototype testing.</p>
+{% set options = (recon_transitions|default({})).get(r.reconciliation_state, ()) %}
+{% if options %}<form method="post" class="payment-reconciliation-form" data-id="{{ r.id }}" data-version="{{ r.reconciliation_version }}">
+<label>Outcome to record<select name="state" required>{% for state in options %}<option>{{ state }}</option>{% endfor %}</select></label>
+<label>Internal decision reason<textarea name="reason" minlength="5" maxlength="500" required></textarea></label>
+<label>Student-visible explanation<textarea name="student_explanation" minlength="5" maxlength="500" required></textarea></label>
+<label>Independent-check / external confirmation notes (internal)<textarea name="confirmation_notes" minlength="5" maxlength="1000" required></textarea></label>
+<label>Evidence reference (internal; no receipt storage paths)<input name="evidence_reference" maxlength="200"></label>
+<label>External confirmer identity/reference (required for refund/retention)<input name="authority_name" maxlength="200"></label>
+<label>External confirmer capacity<select name="authority_capacity"><option value="">Not applicable</option><option value="account_holder">Authorized account holder</option><option value="authorized_financial_decision_maker">Authorized financial decision-maker</option></select></label>
+<label><input type="checkbox" name="independent_check_confirmed"> NO_FUNDS_RECEIVED: I independently checked authorized account/transaction records and confirmed no funds were received.</label>
+<label><input type="checkbox" name="funds_received_confirmed"> REFUND_PENDING / RETAINED: receiving-account records confirm funds were received; a submitted receipt alone is insufficient.</label>
+<label><input type="checkbox" name="authorized_refund_confirmed"> REFUND_PENDING: the responsible authorized decision-maker approved the refund externally.</label>
+<label><input type="checkbox" name="account_holder_refund_confirmed"> REFUNDED: the authorized account holder explicitly confirmed the external refund was completed.</label>
+<label><input type="checkbox" name="authorized_retention_confirmed"> RETAINED: the responsible authorized decision-maker approved keeping the funds externally.</label>
+<p>NEEDS_REVIEW records newly reported evidence only; explain why review is needed in the notes. Only checks relevant to the chosen outcome are required. REFUNDED requires account-holder capacity. Original payment verification and transfer allocation remain unchanged.</p>
+<button type="submit">Record external confirmation / review outcome</button></form>{% endif %}
+{% endif %}
+</section>

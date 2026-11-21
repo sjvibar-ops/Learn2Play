@@ -143,7 +143,7 @@
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.message || "Could not send the booking request.");
       feedback.textContent = "Request sent. Redirecting to My Sessions…";
-      window.setTimeout(() => { window.location.assign("/sessions"); }, 700);
+      window.setTimeout(() => { window.location.assign(data.payment_url || "/sessions"); }, 700);
     } catch (error) {
       feedback.textContent = error.message;
       submitButton.disabled = false;

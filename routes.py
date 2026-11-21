@@ -4,6 +4,8 @@ import secrets
 import urllib.parse
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
+from sqlalchemy import func, or_
 from decimal import Decimal, InvalidOperation
 from functools import wraps
 from io import BytesIO
@@ -28,18 +30,40 @@ from flask_login import (
 )
 from flask_wtf.csrf import generate_csrf
 import jwt
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from supabase import create_client
 from werkzeug.utils import secure_filename
 
 if __package__:
     from .extensions import db
-    from .models import Appointment, Credential, MentorAvailability, MentorUnavailableDate, Message, Report, RoleApplication, User, utcnow
+    from .reconciliation import ReconciliationError, lock_booking_end, end_booking, text_field
+    from .scheduling import lock_schedules, overlaps, participant_bookings, reservation_errors
+    from .models import Appointment, Credential, MentorAvailability, MentorUnavailableDate, Message, Report, RoleApplication, RoleApplicationHistory, User, XpEvent, AttendanceEvent, utcnow
 else:
     from extensions import db
-    from models import Appointment, Credential, MentorAvailability, MentorUnavailableDate, Message, Report, RoleApplication, User, utcnow
+    from reconciliation import ReconciliationError, lock_booking_end, end_booking, text_field
+    from scheduling import lock_schedules, overlaps, participant_bookings, reservation_errors
+    from models import Appointment, Credential, MentorAvailability, MentorUnavailableDate, Message, Report, RoleApplication, RoleApplicationHistory, User, XpEvent, AttendanceEvent, utcnow
 
 main = Blueprint("main", __name__)
+
+def _balance_streak_from_events(events, current_week_start, tz):
+    """Return the consecutive balanced-week streak, preserving it during this week."""
+    paths_by_week = {}
+    for event in events:
+        event_day = event.created_at.replace(tzinfo=timezone.utc).astimezone(tz).date()
+        monday = event_day - timedelta(days=event_day.weekday())
+        paths_by_week.setdefault(monday, set()).add(event.path)
+    balanced_weeks = {week for week, paths in paths_by_week.items() if {"academic", "gaming"} <= paths}
+    current_week_complete = current_week_start in balanced_weeks
+    cursor = current_week_start if current_week_complete else current_week_start - timedelta(days=7)
+    streak = 0
+    while cursor in balanced_weeks:
+        streak += 1
+        cursor -= timedelta(days=7)
+    return streak, current_week_complete
+
+
 
 # ---------- Application Configuration & Central Currency ----------
 ALLOWED_ROLES = {"student", "mentor", "coach"}   # "mentor" is displayed to users as "Teacher"
@@ -54,6 +78,12 @@ LINK_RE = re.compile(r"^https?://\S+\.\S+$", re.I)
 MAX_FILES = 5
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_LINKS = 5
+EXPERIENCE_MIN_LENGTH = 50
+EXPERIENCE_MAX_LENGTH = 1500
+MAX_LINK_LENGTH = 300
+APPLICATION_ROLE_LABELS = {"mentor": "Academic Mentor", "coach": "Gaming Coach"}
+RESUBMITTABLE_STATUSES = {"rejected", "revision_required"}
+
 
 
 class JaasConfigurationError(Exception):
@@ -210,6 +240,14 @@ def provider_required(view):
     return wrapped
 
 
+def provider_approved_for_role(user, role):
+    """True only for an active user whose approved roles include this exact role.
+
+    Mentor and Coach approvals are independent: a mentor approval never covers a
+    coach appointment, and an approval that was removed no longer counts.
+    """
+    return bool(user and user.is_active and role in VERIFIED_ROLES and role in user.roles)
+
 # ---------- User Serializer ----------
 def user_data(user):
     """Consistent user response for frontend consumption."""
@@ -245,7 +283,7 @@ def user_data(user):
             "sessions_count": sessions_count,
             "mentors_count": len(mentors_met),
             "hours_count": round(total_minutes / 60, 1),
-            "avg_rating": 5.0 if sessions_count > 0 else 0.0,
+            "avg_rating": None,  # No review model exists; never fabricate ratings.
         },
     }
 
@@ -270,7 +308,7 @@ def cleanup_credential_objects(object_paths):
     try:
         credentials_bucket().remove(object_paths)
     except Exception:
-        current_app.logger.exception("Failed to clean up credential objects in Storage")
+        current_app.logger.warning("Credential cleanup deferred; Storage details suppressed.")
 
 
 def avatars_bucket():
@@ -386,6 +424,22 @@ def validate_avatar_file(file):
     return ext, size, None
 
 
+def cleanup_uncommitted_application_objects(paths, commit_started):
+    if not paths:
+        return
+    if not commit_started:
+        cleanup_credential_objects(paths)
+        return
+    try:
+        referenced = {row[0] for row in db.session.query(Credential.stored_name).filter(Credential.stored_name.in_(paths)).all()}
+        db.session.rollback()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.warning("Application evidence cleanup deferred; database outcome requires review.")
+        return
+    cleanup_credential_objects([path for path in paths if path not in referenced])
+
+
 def check_upload(file):
     name = secure_filename(file.filename or "")
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
@@ -405,6 +459,15 @@ def check_upload(file):
     if size > MAX_FILE_BYTES:
         return None, f'"{file.filename}" is over 5 MB.'
 
+    if ext in ("jpg", "jpeg", "png"):
+        if __package__:
+            from .payments import valid_image
+        else:
+            from payments import valid_image
+        content = file.stream.read(MAX_FILE_BYTES + 1)
+        file.stream.seek(0)
+        if not valid_image(content, ext == "png"):
+            return None, "The evidence image is invalid or exceeds supported dimensions."
     return ext, None
 
 
@@ -443,16 +506,16 @@ def csrf_token():
 # ---------- Register & Login API ----------
 @main.route("/api/auth/register", methods=["POST"])
 def register():
+    # Registration only creates a standard Student account. Mentor/Coach
+    # applications (and any supporting evidence) are submitted after sign-up,
+    # so this view never touches Storage, Credential or RoleApplication.
     form = request.form
 
     name = (form.get("name") or "").strip()
     email = (form.get("email") or "").strip().lower()
     password = form.get("password") or ""
     confirm = form.get("confirm_password") or ""
-    roles = set(form.getlist("roles"))
 
-    if not roles or not roles <= ALLOWED_ROLES:
-        return error("Choose at least one valid role.", field="roles")
     if not 2 <= len(name) <= 80:
         return error("Enter your full name (2 to 80 characters).", field="name")
     if not EMAIL_RE.match(email):
@@ -476,105 +539,30 @@ def register():
     if User.query.filter_by(email=email).first():
         return error("That email is already registered. Try logging in instead.", 409, field="email")
 
-    needs_review = bool(roles & VERIFIED_ROLES)
-    bio, links, checked_files = "", [], []
-
-    if needs_review:
-        bio = (form.get("bio") or "").strip()
-        links = [link.strip() for link in form.getlist("links") if link.strip()]
-        uploads = [f for f in request.files.getlist("proofs") if f and f.filename]
-
-        if not uploads:
-            return error("Upload at least one certificate, license, diploma or award.", field="proofs")
-        if len(uploads) > MAX_FILES:
-            return error(f"You can upload up to {MAX_FILES} files.", field="proofs")
-        if not 50 <= len(bio) <= 1500:
-            return error("Describe your experience in 50 to 1500 characters.", field="bio")
-        if len(links) > MAX_LINKS or any(not LINK_RE.match(link) or len(link) > 300 for link in links):
-            return error(f"Links must start with http:// or https:// (max {MAX_LINKS}).", field="links")
-
-        for f in uploads:
-            ext, problem = check_upload(f)
-            if problem:
-                return error(problem, field="proofs")
-            checked_files.append((f, ext))
-
-    uploaded_object_paths = []
     try:
-        active_roles = sorted(roles - VERIFIED_ROLES)
         user = User(display_name=name, email=email)
         user.set_password(password)
-        user.roles = active_roles
+        user.roles = ["student"]
 
         db.session.add(user)
-        db.session.flush()
-
-        if needs_review:
-            bucket = credentials_bucket()
-            for f, ext in checked_files:
-                stored = f"{user.id}/{uuid.uuid4().hex}.{ext}"
-                bucket.upload(
-                    path=stored,
-                    file=f.read(),
-                    file_options={
-                        "content-type": CREDENTIAL_MIME_TYPES[ext],
-                        "upsert": "false",
-                    },
-                )
-                uploaded_object_paths.append(stored)
-                db.session.add(Credential(
-                    user_id=user.id,
-                    original_name=secure_filename(f.filename)[:255],
-                    stored_name=stored,
-                ))
-
-            for role in sorted(roles & VERIFIED_ROLES):
-                db.session.add(RoleApplication(
-                    user_id=user.id,
-                    role=role,
-                    bio=bio,
-                    links="\n".join(links),
-                    status="pending",
-                ))
-
         db.session.commit()
 
     except IntegrityError:
         db.session.rollback()
-        cleanup_credential_objects(uploaded_object_paths)
         return error("That email is already registered. Try logging in instead.", 409, field="email")
 
     except Exception:
         db.session.rollback()
-        cleanup_credential_objects(uploaded_object_paths)
         current_app.logger.exception("Registration failed")
         return error("We couldn't create your account. Please try again.", 500)
 
-    if not needs_review:
-        login_user(user)
-        return jsonify({
-            "ok": True,
-            "pending": False,
-            "message": "Your student account is active. Welcome to Learn2Play!",
-            "redirect": url_for("main.dashboard"),
-            "user": user_data(user),
-        }), 201
-
-    if active_roles:
-        login_user(user)
-        return jsonify({
-            "ok": True,
-            "pending": True,
-            "message": "Your registration is pending admin review. You can use your account as a student in the meantime.",
-            "redirect": url_for("main.dashboard"),
-            "user": user_data(user),
-        }), 201
-
+    login_user(user)
     return jsonify({
         "ok": True,
-        "pending": True,
-        "message": "Your registration is pending admin review. We'll verify your credentials and email you once approved.",
-        "redirect": url_for("main.auth_page"),
+        "pending": False,
+        "message": "Your student account is active. Welcome to Learn2Play! You can apply to become a Mentor or Coach from your account after you sign in.",
+        "redirect": url_for("main.dashboard"),
+        "user": user_data(user),
     }), 201
 
 
@@ -596,12 +584,9 @@ def login():
     if not user.is_active:
         return error("This account is inactive.", 403)
 
-    if not user.roles:
-        pending = RoleApplication.query.filter_by(user_id=user.id, status="pending").first()
-        if pending:
-            return error("Your registration is still pending admin review.", 403)
-        return error("Your teacher/coach application was not approved.", 403)
-
+    # Active accounts with roles == [] (pending or rejected provider-only
+    # registrations) may sign in with limited permissions. Roles are never
+    # assigned here; they only change through admin approval.
     login_user(user, remember=remember is True)
 
 # Redirect admins and regular users to their respective dashboards
@@ -639,21 +624,34 @@ def list_applications():
     status = request.args.get("status", "pending")
     rows = (
         RoleApplication.query.filter_by(status=status)
-        .order_by(RoleApplication.created_at.asc())
+        .order_by(func.coalesce(RoleApplication.submitted_at, RoleApplication.created_at).asc())
         .all()
     )
 
     items = []
     for app_row in rows:
         user = db.session.get(User, app_row.user_id)
-        creds = Credential.query.filter_by(user_id=app_row.user_id).all()
+        # A file belongs to the application it was uploaded for. Legacy files
+        # (application_id NULL) have an unknown application, so they stay
+        # visible on every application of that user, exactly as before.
+        creds = (
+            Credential.query.filter(
+                Credential.user_id == app_row.user_id,
+                or_(
+                    Credential.application_id == app_row.id,
+                    Credential.application_id.is_(None),
+                ),
+            )
+            .order_by(Credential.id.asc())
+            .all()
+        )
         items.append({
             "id": app_row.id,
             "role": app_row.role,
             "status": app_row.status,
             "bio": app_row.bio,
             "links": [l for l in (app_row.links or "").split("\n") if l],
-            "submitted_at": app_row.created_at.isoformat(),
+            "submitted_at": (app_row.submitted_at or app_row.created_at).isoformat(),
             "user": {"id": user.id, "name": user.display_name, "email": user.email},
             "credentials": [
                 {
@@ -668,11 +666,49 @@ def list_applications():
     return jsonify({"ok": True, "applications": items})
 
 
+# ---------- Admin review of provider applications (Batch 2.1C) ----------
+# action in the URL -> (status after the review, history event_type, message)
+REVIEW_ACTIONS = {
+    "approve": ("approved", "approved", "Application approved."),
+    "reject": ("rejected", "rejected", "Application rejected."),
+    "request-revision": ("revision_required", "revision_requested", "Revision requested."),
+}
+# PROPOSED defaults (owner to confirm): what counts as a "meaningful" note.
+REVISION_NOTE_MIN_LENGTH = 10
+REVIEW_NOTE_MAX_LENGTH = 500          # RoleApplication.review_note is String(500)
+
+
+def parse_revision_note(payload):
+    """Return (note, None) or (None, problem). "reason" is accepted as an alias
+    of "note" so the existing reject text field can be reused by the frontend."""
+    raw = payload.get("note") if "note" in payload else payload.get("reason")
+    if raw is None:
+        raw = ""
+    if not isinstance(raw, str):
+        return None, "The revision note must be text."
+    note = raw.strip()
+    if "\x00" in note:
+        return None, "The note contains unsupported characters."
+    if not note:
+        return None, "Please explain what the applicant needs to change."
+    if len(note) < REVISION_NOTE_MIN_LENGTH:
+        return None, f"The revision note must be at least {REVISION_NOTE_MIN_LENGTH} characters."
+    if len(note) > REVIEW_NOTE_MAX_LENGTH:
+        return None, f"The revision note must be {REVIEW_NOTE_MAX_LENGTH} characters or fewer."
+    return note, None
+
+
 @main.route("/api/admin/applications/<int:application_id>/<action>", methods=["POST"])
 @admin_required
 def review_application(application_id, action):
-    if action not in {"approve", "reject"}:
+    """pending -> approved | rejected | revision_required, nothing else.
+
+    The status change, the role grant (approve only) and one append-only
+    RoleApplicationHistory row are committed together or not at all.
+    """
+    if action not in REVIEW_ACTIONS:
         return error("Unknown action.", 404)
+    new_status, event_type, success_message = REVIEW_ACTIONS[action]
 
     app_row = db.session.get(RoleApplication, application_id)
     if not app_row:
@@ -680,21 +716,88 @@ def review_application(application_id, action):
     if app_row.status != "pending":
         return error("This application was already reviewed.", 409)
 
-    user = db.session.get(User, app_row.user_id)
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        payload = {}
+    note = None
+    if action == "reject":
+        # Existing behaviour: optional, trimmed and truncated.
+        raw_reason = payload.get("reason", "")
+        if not isinstance(raw_reason, str) or "\x00" in raw_reason:
+            return error("The rejection reason must be valid text.", 400, field="reason")
+        note = raw_reason.strip()[:REVIEW_NOTE_MAX_LENGTH] or None
+    elif action == "request-revision":
+        note, problem = parse_revision_note(payload)
+        if problem:
+            return error(problem, 400, field="note")
 
-    if action == "approve":
-        app_row.status = "approved"
-        user.roles = sorted(set(user.roles) | {app_row.role})
-    else:
-        app_row.status = "rejected"
-        reason = (request.get_json(silent=True) or {}).get("reason", "")
-        app_row.review_note = str(reason).strip()[:500] or None
+    admin_id = current_user.id
+    try:
+        applicant = User.query.filter_by(id=app_row.user_id).with_for_update().populate_existing().first()
+        if applicant is None:
+            db.session.rollback()
+            return error("Applicant account not found.", 404)
+        # Re-read under a row lock: another admin may have reviewed it meanwhile.
+        row = (
+            RoleApplication.query.filter_by(id=application_id)
+            .with_for_update()
+            .populate_existing()
+            .first()
+        )
+        if row is None:
+            db.session.rollback()
+            return error("Application not found.", 404)
+        if row.status != "pending":
+            db.session.rollback()
+            return error("This application was already reviewed.", 409)
 
-    app_row.reviewed_by = current_user.id
-    app_row.reviewed_at = utcnow()
-    db.session.commit()
+        if action == "approve":
+            if row.role not in VERIFIED_ROLES:
+                db.session.rollback()
+                return error("This application has an unsupported role.", 409)
+        now = utcnow()
+        result = {"id": row.id, "user_id": row.user_id, "role": row.role}
+        # Snapshot of the state this decision replaces, taken before any change.
+        history = RoleApplicationHistory(
+            actor_id=admin_id,
+            decision_note=note,
+            application_id=row.id,
+            user_id=row.user_id,
+            role=row.role,
+            event_type=event_type,
+            from_status="pending",
+            to_status=new_status,
+            prior_bio=row.bio,
+            prior_links=row.links,
+            prior_review_note=row.review_note,
+            prior_reviewed_by=row.reviewed_by,
+            prior_reviewed_at=row.reviewed_at,
+            prior_submitted_at=row.submitted_at or row.created_at,
+            created_at=now,
+        )
 
-    return jsonify({"ok": True, "message": f"Application {app_row.status}."})
+        row.status = new_status
+        if action != "approve":
+            row.review_note = note
+        row.reviewed_by = admin_id
+        row.reviewed_at = now
+        if action == "approve":
+            applicant.roles = sorted(set(applicant.roles) | {row.role})
+        final_note = row.review_note
+        db.session.add(history)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.warning("Saving the application review failed; internal details suppressed.")
+        return error("We couldn't save the review. Please try again.", 500)
+
+    result.update({
+        "status": new_status,
+        "review_note": final_note,
+        "reviewed_by": admin_id,
+        "reviewed_at": now.isoformat(),
+    })
+    return jsonify({"ok": True, "message": success_message, "application": result})
 
 
 @main.route("/admin/credentials/<int:credential_id>")
@@ -720,6 +823,335 @@ def download_credential(credential_id):
     except Exception:
         current_app.logger.exception("Credential download from Storage failed")
         return error("Unable to retrieve the credential file.", 500)
+
+
+# ---------- Provider Applications (Batch 2.1B) ----------
+def application_status_for(user, role, row):
+    """not_submitted | pending | approved | rejected | revision_required."""
+    if row is not None:
+        return row.status
+    return "approved" if role in user.roles else "not_submitted"
+
+
+def application_conflict_message(user, role, row):
+    """Why this user cannot submit for this role right now, or None if allowed."""
+    label = APPLICATION_ROLE_LABELS[role]
+    if role in user.roles or (row is not None and row.status == "approved"):
+        return f"Your {label} application is already approved."
+    if row is None or row.status in RESUBMITTABLE_STATUSES:
+        return None
+    if row.status == "pending":
+        return f"Your {label} application is already pending review."
+    return f"Your {label} application can't be changed right now."
+
+
+def serialize_application_credential(cred):
+    # Safe display metadata only: never the storage path or a download URL.
+    return {
+        "id": cred.id,
+        "name": cred.original_name,
+        "uploaded_at": cred.created_at.isoformat() if cred.created_at else None,
+    }
+
+
+def serialize_application(user, role, row):
+    status = application_status_for(user, role, row)
+    credentials = []
+    if row is not None:
+        credentials = (
+            Credential.query.filter_by(user_id=user.id, application_id=row.id)
+            .order_by(Credential.id.asc())
+            .all()
+        )
+    submitted_at = (row.submitted_at or row.created_at) if row is not None else None
+    return {
+        "role": role,
+        "status": status,
+        "experience_description": row.bio if row is not None else "",
+        "links": [l for l in (row.links or "").split("\n") if l] if row is not None else [],
+        "review_note": (
+            row.review_note
+            if row is not None and status in RESUBMITTABLE_STATUSES
+            else None
+        ),
+        "submitted_at": submitted_at.isoformat() if submitted_at else None,
+        "reviewed_at": row.reviewed_at.isoformat() if row is not None and row.reviewed_at else None,
+        "credentials": [serialize_application_credential(c) for c in credentials],
+        "can_submit": application_conflict_message(user, role, row) is None,
+    }
+
+
+def parse_application_request():
+    """Read and validate the submitted fields.
+
+    Returns (data, problem). problem is (message, field) or None; data holds
+    the cleaned description and links plus the uploaded file objects.
+    """
+    description_problem = (
+        f"Describe your experience in {EXPERIENCE_MIN_LENGTH} to {EXPERIENCE_MAX_LENGTH} characters.",
+        "experience_description",
+    )
+    links_problem = (
+        f"Links must start with http:// or https:// (max {MAX_LINKS}).",
+        "links",
+    )
+
+    if request.is_json:
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return None, ("The request body must be a JSON object.", None)
+        raw_description = body.get("experience_description")
+        raw_links = body.get("links", [])
+        if isinstance(raw_links, str):
+            raw_links = [raw_links]
+        if not isinstance(raw_links, list) or any(not isinstance(l, str) for l in raw_links):
+            return None, links_problem
+        uploads = []
+    else:
+        raw_description = request.form.get("experience_description")
+        raw_links = request.form.getlist("links")
+        uploads = [f for f in request.files.getlist("proofs") if f and f.filename]
+
+    if not isinstance(raw_description, str):
+        return None, description_problem
+    description = raw_description.strip()
+    if not EXPERIENCE_MIN_LENGTH <= len(description) <= EXPERIENCE_MAX_LENGTH:
+        return None, description_problem
+
+    links = []
+    for raw in raw_links:
+        links.extend(part.strip() for part in raw.splitlines() if part.strip())
+
+    # PostgreSQL text columns cannot hold NUL characters.
+    if "\x00" in description or any("\x00" in link for link in links):
+        return None, ("The text contains characters that are not allowed.", "experience_description")
+    if len(links) > MAX_LINKS or any(
+        not LINK_RE.match(link) or len(link) > MAX_LINK_LENGTH for link in links
+    ):
+        return None, links_problem
+
+    return {"description": description, "links": links, "uploads": uploads}, None
+
+
+@main.route("/api/me/applications", methods=["GET"])
+@login_required
+def get_my_applications():
+    rows = {
+        row.role: row
+        for row in RoleApplication.query.filter_by(user_id=current_user.id).all()
+    }
+    # Files uploaded before Batch 2.1B have no known application. They are
+    # listed separately and never attributed to the mentor or coach application.
+    legacy_credentials = (
+        Credential.query.filter(
+            Credential.user_id == current_user.id,
+            Credential.application_id.is_(None),
+        )
+        .order_by(Credential.id.asc())
+        .all()
+    )
+    response = jsonify({
+        "ok": True,
+        "applications": {
+            role: serialize_application(current_user, role, rows.get(role))
+            for role in ("mentor", "coach")
+        },
+        "legacy_credentials": [serialize_application_credential(c) for c in legacy_credentials],
+        "limits": {
+            "experience_min_length": EXPERIENCE_MIN_LENGTH,
+            "experience_max_length": EXPERIENCE_MAX_LENGTH,
+            "max_links": MAX_LINKS,
+            "max_files": MAX_FILES,
+            "max_file_bytes": MAX_FILE_BYTES,
+            "allowed_file_types": sorted(FILE_SIGNATURES),
+        },
+    })
+    response.headers["Cache-Control"] = "no-store, private"
+    return response
+
+
+@main.route("/api/me/applications/<role>", methods=["POST"])
+@login_required
+def submit_my_application(role):
+    """Submit or resubmit the current user's application for one provider role.
+
+    Never changes user.roles: only an admin approval can grant a role.
+    """
+    if role not in APPLICATION_ROLE_LABELS:
+        return error("Unknown role. Apply as mentor or coach.", 404, field="role")
+
+    user_id = current_user.id
+    row = RoleApplication.query.filter_by(user_id=user_id, role=role).first()
+    conflict = application_conflict_message(current_user, role, row)
+    if conflict:
+        return error(conflict, 409, field="status")
+
+    data, problem = parse_application_request()
+    if problem:
+        return error(problem[0], 400, field=problem[1])
+
+    # Validate every file before anything is uploaded.
+    uploads = data["uploads"]
+    existing_files = (
+        Credential.query.filter_by(user_id=user_id, application_id=row.id).count()
+        if row is not None
+        else 0
+    )
+    if len(uploads) > MAX_FILES:
+        return error(f"You can upload up to {MAX_FILES} files.", 400, field="proofs")
+    if existing_files + len(uploads) > MAX_FILES:
+        return error(
+            f"This application already has {existing_files} file(s); "
+            f"you can add {max(MAX_FILES - existing_files, 0)} more.",
+            400,
+            field="proofs",
+        )
+    checked_files = []
+    for upload in uploads:
+        ext, file_problem = check_upload(upload)
+        if file_problem:
+            return error(file_problem, 400, field="proofs")
+        checked_files.append((upload, ext))
+
+    # Storage paths are generated here, never taken from the client.
+    planned = []
+    for upload, ext in checked_files:
+        planned.append({
+            "path": f"{user_id}/{role}/{uuid.uuid4().hex}.{ext}",
+            "ext": ext,
+            "name": secure_filename(upload.filename)[-255:],
+            "data": upload.stream.read(),
+        })
+    intended_paths = [item["path"] for item in planned]
+
+    # Storage is reached only when files were attached.
+    if planned:
+        # End the read-only transaction so no database connection is held open
+        # during network I/O; the state is re-read under a lock below.
+        db.session.rollback()
+        try:
+            bucket = credentials_bucket()
+            for item in planned:
+                bucket.upload(
+                    item["path"],
+                    item["data"],
+                    {"content-type": CREDENTIAL_MIME_TYPES[item["ext"]], "upsert": "false"},
+                )
+        except Exception:
+            current_app.logger.warning("Application evidence upload failed; internal details suppressed.")
+            cleanup_credential_objects(intended_paths)
+            return error("We couldn't upload your files. Please try again.", 500, field="proofs")
+
+    created = False
+    commit_started = False
+    try:
+        applicant = User.query.filter_by(id=user_id).with_for_update().populate_existing().first()
+        if applicant is None or not applicant.is_active:
+            db.session.rollback()
+            cleanup_credential_objects(intended_paths)
+            return error("Account is unavailable.", 403)
+        # Re-read under a row lock: the state may have changed during the uploads.
+        row = (
+            RoleApplication.query.filter_by(user_id=user_id, role=role)
+            .with_for_update()
+            .populate_existing()
+            .first()
+        )
+        conflict = application_conflict_message(applicant, role, row)
+        if conflict:
+            db.session.rollback()
+            cleanup_credential_objects(intended_paths)
+            return error(conflict, 409, field="status")
+
+        if row is not None and Credential.query.filter_by(user_id=user_id, application_id=row.id).count() + len(planned) > MAX_FILES:
+            db.session.rollback()
+            cleanup_credential_objects(intended_paths)
+            return error("This application already has the maximum number of files.", 409, field="proofs")
+        now = utcnow()
+        links_text = "\n".join(data["links"])
+        if row is None:
+            created = True
+            row = RoleApplication(
+                user_id=user_id,
+                role=role,
+                bio=data["description"],
+                links=links_text,
+                status="pending",
+                created_at=now,
+                submitted_at=now,
+            )
+            db.session.add(row)
+            db.session.flush()
+            history = RoleApplicationHistory(
+                actor_id=user_id,
+                application_id=row.id,
+                user_id=user_id,
+                role=role,
+                event_type="submitted",
+                from_status="not_submitted",
+                to_status="pending",
+                created_at=now,
+            )
+        else:
+            # Keep the replaced state, including the review decision, in history.
+            history = RoleApplicationHistory(
+                actor_id=user_id,
+                application_id=row.id,
+                user_id=user_id,
+                role=role,
+                event_type="resubmitted",
+                from_status=row.status,
+                to_status="pending",
+                prior_bio=row.bio,
+                prior_links=row.links,
+                prior_review_note=row.review_note,
+                prior_reviewed_by=row.reviewed_by,
+                prior_reviewed_at=row.reviewed_at,
+                prior_submitted_at=row.submitted_at or row.created_at,
+                created_at=now,
+            )
+            row.bio = data["description"]
+            row.links = links_text
+            row.status = "pending"
+            row.review_note = None
+            row.reviewed_by = None
+            row.reviewed_at = None
+            row.submitted_at = now
+        db.session.add(history)
+
+        for item in planned:
+            db.session.add(Credential(
+                user_id=user_id,
+                application_id=row.id,
+                original_name=item["name"],
+                stored_name=item["path"],
+            ))
+        db.session.flush()
+        commit_started = True
+        db.session.commit()
+
+    except IntegrityError:
+        db.session.rollback()
+        cleanup_uncommitted_application_objects(intended_paths, commit_started)
+        return error(
+            "Your application was just submitted from another session. Refresh and try again.",
+            409,
+            field="status",
+        )
+    except Exception:
+        db.session.rollback()
+        current_app.logger.warning("Saving the provider application failed; internal details suppressed.")
+        cleanup_uncommitted_application_objects(intended_paths, commit_started)
+        return error("We couldn't save your application. Please try again.", 500)
+
+    label = APPLICATION_ROLE_LABELS[role]
+    verb = "submitted" if created else "resubmitted"
+    return jsonify({
+        "ok": True,
+        "message": f"Your {label} application was {verb} for review.",
+        "application": serialize_application(current_user, role, row),
+    }), (201 if created else 200)
+
 
 
 # ---------- Profile Management APIs (Requirements 2 & 3) ----------
@@ -947,7 +1379,7 @@ def get_registered_tutors():
                 "price": display_rate if display_rate is not None else 300,
                 "currency": CURRENCY_CODE,
                 "currency_symbol": CURRENCY_SYMBOL,
-                "rating": 5.0,
+                "rating": None,
                 "reviews": 0,
             })
 
@@ -1052,8 +1484,7 @@ def tutor_availability(user_id):
         return jsonify({"ok": True, "slots": []})
     windows = MentorAvailability.query.filter_by(mentor_id=user_id, weekday=selected.weekday()).all()
     slots = []
-    booked = Appointment.query.filter(Appointment.status.in_(["pending", "accepted", "scheduled"]),
-        ((Appointment.provider_id == user_id) | (Appointment.student_id == current_user.id))).all()
+    booked = participant_bookings(user_id, current_user.id).all()
     for window in windows:
         start = datetime.combine(selected, time.fromisoformat(window.start_time))
         end = datetime.combine(selected, time.fromisoformat(window.end_time))
@@ -1069,6 +1500,7 @@ def tutor_availability(user_id):
 
 @main.route("/api/availability", methods=["GET", "POST", "DELETE"])
 @provider_required
+@reservation_errors
 def manage_availability():
     if request.method == "GET":
         rows = MentorAvailability.query.filter_by(mentor_id=current_user.id).order_by(
@@ -1078,6 +1510,7 @@ def manage_availability():
             {"id": r.id, "weekday": r.weekday, "start_time": r.start_time, "end_time": r.end_time}
             for r in rows
         ]})
+    lock_schedules(current_user.id)
     data = request.get_json(silent=True) or {}
     if request.method == "DELETE":
         row = MentorAvailability.query.filter_by(id=data.get("id"), mentor_id=current_user.id).first()
@@ -1107,12 +1540,14 @@ def manage_availability():
 
 @main.route("/api/unavailable-dates", methods=["GET", "POST", "DELETE"])
 @provider_required
+@reservation_errors
 def manage_unavailable_dates():
     if request.method == "GET":
         rows = MentorUnavailableDate.query.filter_by(mentor_id=current_user.id).order_by(
             MentorUnavailableDate.unavailable_date
         ).all()
         return jsonify({"ok": True, "dates": [{"id": r.id, "date": r.unavailable_date.isoformat()} for r in rows]})
+    lock_schedules(current_user.id)
     data = request.get_json(silent=True) or {}
     if request.method == "DELETE":
         row = MentorUnavailableDate.query.filter_by(id=data.get("id"), mentor_id=current_user.id).first()
@@ -1140,24 +1575,37 @@ def manage_unavailable_dates():
 
 @main.route("/api/bookings", methods=["POST"])
 @login_required
+@reservation_errors
 def create_booking():
     if "student" not in current_user.roles or current_user.is_admin:
         return error("Only student accounts can request a session.", 403)
     data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return error("Provide a valid booking request.")
     try:
         mentor_id = int(data.get("mentor_id"))
     except (TypeError, ValueError):
         return error("Mentor not found.", 404)
-    mentor = db.session.get(User, mentor_id)
-    topic = (data.get("topic") or "").strip()[:120]
-    message = (data.get("message") or "").strip()[:1000]
+    topic = data.get("topic") or ""
+    message = data.get("message") or ""
+    if not isinstance(topic, str) or not isinstance(message, str):
+        return error("Booking topic and message must be text.")
+    topic, message = topic.strip()[:120], message.strip()[:1000]
     try:
         day = date.fromisoformat(data.get("date", ""))
         slot = time.fromisoformat(data.get("time", ""))
     except (TypeError, ValueError):
         return error("Choose an available date and time.")
+    if slot.tzinfo is not None:
+        return error("Choose a local Philippine time without a timezone suffix.")
+    users = lock_schedules(mentor_id, current_user.id)
+    mentor = users.get(mentor_id)
+    if not current_user.is_active or "student" not in current_user.roles or current_user.is_admin:
+        return error("Only active student accounts can request a session.", 403)
     if not mentor or not mentor.is_active or not any(r in mentor.roles for r in ("mentor", "coach")):
         return error("Mentor not found.", 404)
+    if mentor.id == current_user.id:
+        return error("You cannot book a session with yourself.", 403)
     requested_role = data.get("role")
     if requested_role is not None and requested_role not in ("mentor", "coach"):
         return error("Choose a valid session track.")
@@ -1170,18 +1618,17 @@ def create_booking():
         return error("Choose a whole-hour available slot.")
     if MentorUnavailableDate.query.filter_by(mentor_id=mentor.id, unavailable_date=day).first():
         return error("The mentor is unavailable on that date.")
-    window = MentorAvailability.query.filter_by(mentor_id=mentor.id, weekday=day.weekday()).filter(
-        MentorAvailability.start_time <= slot.strftime("%H:%M"),
-        MentorAvailability.end_time >= (datetime.combine(day, slot) + timedelta(hours=1)).strftime("%H:%M"),
-    ).first()
+    local_start = datetime.combine(day, slot)
+    local_end = local_start + timedelta(hours=1)
+    windows = MentorAvailability.query.filter_by(mentor_id=mentor.id, weekday=day.weekday()).all()
+    window = any(datetime.combine(day, time.fromisoformat(w.start_time)) <= local_start and
+                 datetime.combine(day, time.fromisoformat(w.end_time)) >= local_end for w in windows)
     start_utc = datetime.combine(day, slot) - timedelta(hours=8)
     now_utc = utcnow()
     if not window or start_utc <= now_utc or start_utc > now_utc + timedelta(days=60):
         return error("That time is outside the mentor's available schedule.")
-    booked = Appointment.query.filter(Appointment.status.in_(["pending", "accepted", "scheduled"]),
-        ((Appointment.provider_id == mentor.id) | (Appointment.student_id == current_user.id))).all()
-    clash = any(a.start_time < start_utc + timedelta(hours=1) and
-        a.start_time + timedelta(minutes=a.duration_minutes or 60) > start_utc for a in booked)
+    booked = participant_bookings(mentor.id, current_user.id).all()
+    clash = overlaps(booked, start_utc)
     if clash:
         return error("That time was just booked. Please choose another slot.", 409)
     rate = mentor.teaching_rate if role == "mentor" else mentor.coaching_rate
@@ -1189,10 +1636,22 @@ def create_booking():
         rate = mentor.hourly_rate
     appt = Appointment(provider_id=mentor.id, student_id=current_user.id, role=role,
         topic=topic, start_time=start_utc, duration_minutes=60, status="pending",
-        price=rate, currency="PHP", location_type="Online", notes=message)
-    db.session.add(appt)
-    db.session.commit()
-    return jsonify({"ok": True, "booking_id": appt.id, "message": "Booking request sent to the mentor."}), 201
+        price=Decimal(str(rate or 0)).quantize(Decimal("0.01")), currency="PHP", location_type="Online", notes=message,
+        payment_required=Decimal(str(rate or 0)) > 0)
+    try:
+        db.session.add(appt)
+        db.session.flush()
+        if appt.payment_required:
+            if __package__:
+                from .payments import new_payment
+            else:
+                from payments import new_payment
+            db.session.add(new_payment(appt))
+        db.session.commit()
+    except SQLAlchemyError:
+        db.session.rollback()
+        return error("Booking could not be saved. Please retry.", 503)
+    return jsonify({"ok": True, "payment_url": url_for("payments.student_payment", booking_id=appt.id) if appt.payment_required else None, "booking_id": appt.id, "message": "Booking request sent to the mentor."}), 201
 
 
 @main.route("/api/bookings", methods=["GET"])
@@ -1206,41 +1665,265 @@ def list_my_bookings():
         "student": a.student.display_name if a.student else "Student",
         "mentor": a.provider.display_name if a.provider else "Mentor",
         "role": a.role, "topic": a.topic, "status": a.status,
+        "provider_confirmed": a.provider_confirmed_at is not None,
+        "student_confirmed": a.student_confirmed_at is not None,
+        "attendance_disputed": a.attendance_disputed,
+        "attendance_closed": a.attendance_closed_at is not None,
+        "attendance_resolution": a.attendance_resolution,
+        "attendance_resolution_reason": a.attendance_resolution_reason,
+        "xp_awarded": XpEvent.query.filter_by(appointment_id=a.id).first() is not None,
         "start_time": a.start_time.replace(tzinfo=timezone.utc).isoformat(),
         "formatted": format_dt_pht(a.start_time), "duration": a.duration_minutes,
         "price": float(a.price) if a.price is not None else None, "notes": a.notes or "",
+        "payment_status": a.payment.status if a.payment and (a.student_id == current_user.id or current_user.is_admin) else None,
+        "payment_reference": a.payment.reference if a.payment and (a.student_id == current_user.id or current_user.is_admin) else None,
+        "payment_satisfied": a.payment_satisfied,
+        "payment_url": url_for("payments.student_payment", booking_id=a.id) if a.payment and (a.student_id == current_user.id or current_user.is_admin) else None,
+        "reconciliation_state": a.payment.reconciliation_state if a.payment and (a.student_id == current_user.id or current_user.is_admin) else None,
+        "reconciliation_explanation": a.payment.reconciliation_explanation if a.payment and (a.student_id == current_user.id or current_user.is_admin) else None,
+        "ended_at": a.ended_at.isoformat() if a.ended_at else None,
+        "ending_reason": a.ending_reason,
         "meeting_room": bool(a.meeting_room)
     } for a in rows]})
 
 
+def booking_ending_reason(default=None):
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise ReconciliationError("Provide a valid booking-ending object.", 400)
+    if data.get("reason") is None and default is not None:
+        return default
+    return text_field(data.get("reason"), "a booking ending reason")
+
+
 @main.route("/api/bookings/<int:booking_id>/<action>", methods=["POST"])
 @login_required
+@reservation_errors
 def update_booking(booking_id, action):
-    appt = db.session.get(Appointment, booking_id)
+    participants = None
+    if action == "accept":
+        snapshot = db.session.get(Appointment, booking_id)
+        if snapshot is None:
+            return error("Booking not found.", 404)
+        if snapshot.provider_id != current_user.id:
+            return error("You cannot update this booking.", 403)
+        participants = (snapshot.provider_id, snapshot.student_id)
+        lock_schedules(*participants)
+    payment = None
+    if action in ("cancel", "reject"):
+        try:
+            payment, appt = lock_booking_end(booking_id)
+        except ReconciliationError as exc:
+            return error(exc.message, exc.status)
+    else:
+        appt = Appointment.query.filter_by(id=booking_id).populate_existing().with_for_update().first()
     if not appt:
         return error("Booking not found.", 404)
     if action in ("accept", "reject"):
+        if action == "accept" and not provider_approved_for_role(current_user, appt.role):
+            return error("You are not approved for this booking role.", 403)
         if appt.provider_id != current_user.id or appt.status != "pending":
             return error("You cannot update this booking.", 403)
         if action == "reject":
-            appt.status = "rejected"
+            try:
+                end_booking(appt, payment, current_user.id, "rejected",
+                            booking_ending_reason("Rejected by the assigned provider."))
+            except ReconciliationError as exc:
+                return error(exc.message, exc.status)
         else:
+            if participants != (appt.provider_id, appt.student_id):
+                return error("This booking changed. Refresh and retry.", 409)
+            others = participant_bookings(*participants).filter(Appointment.id != appt.id).all()
+            if overlaps(others, appt.start_time, appt.duration_minutes):
+                return error("This session conflicts with another reservation. Reject or cancel the conflicting request first.", 409)
             appt.status = "accepted"
             appt.meeting_room = appt.meeting_room or "l2-" + secrets.token_urlsafe(18)
     elif action == "cancel":
         if current_user.id not in (appt.student_id, appt.provider_id) or appt.status not in ("pending", "accepted", "scheduled"):
             return error("You cannot cancel this booking.", 403)
-        appt.status = "cancelled"
-    elif action == "complete":
-        if appt.provider_id != current_user.id or appt.status not in ("accepted", "scheduled"):
-            return error("You cannot complete this session.", 403)
-        if appt.start_time + timedelta(minutes=appt.duration_minutes or 60) > utcnow():
-            return error("A session can be completed after its scheduled end time.")
-        appt.status = "completed"
+        try:
+            role = "student" if current_user.id == appt.student_id else "provider"
+            end_booking(appt, payment, current_user.id, "cancelled",
+                        booking_ending_reason(f"Cancelled by the assigned {role}."))
+        except ReconciliationError as exc:
+            return error(exc.message, exc.status)
+    elif action in ("complete", "confirm-attendance", "dispute-attendance"):
+        if action == "complete" and not provider_approved_for_role(current_user, appt.role):
+            return error("You are not approved for this booking role.", 403)
+        if __package__:
+            from .attendance import AttendanceError, apply_attendance
+        else:
+            from attendance import AttendanceError, apply_attendance
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return error("Provide a valid attendance object.")
+        try:
+            apply_attendance(appt, current_user.id, action, data.get("note", ""))
+        except AttendanceError as exc:
+            db.session.rollback()
+            return error(exc.message, exc.status)
     else:
         return error("Unsupported booking action.")
-    db.session.commit()
-    return jsonify({"ok": True, "status": appt.status})
+    try:
+        db.session.commit()
+    except SQLAlchemyError:
+        db.session.rollback()
+        return error("Booking update could not be saved. Please retry.", 503)
+    return jsonify({"ok": True, "status": appt.status,
+        "provider_confirmed": appt.provider_confirmed_at is not None,
+        "student_confirmed": appt.student_confirmed_at is not None,
+        "attendance_disputed": appt.attendance_disputed,
+        "attendance_closed": appt.attendance_closed_at is not None})
+
+
+@main.route("/api/admin/bookings/<int:booking_id>/<action>", methods=["POST"])
+@admin_required
+@reservation_errors
+def admin_end_booking(booking_id, action):
+    if action not in ("cancel", "reject"):
+        return error("Choose cancel or reject.", 400)
+    try:
+        payment, appt = lock_booking_end(booking_id)
+        if appt is None:
+            return error("Booking not found.", 404)
+        end_booking(appt, payment, current_user.id,
+                    "cancelled" if action == "cancel" else "rejected", booking_ending_reason())
+        db.session.commit()
+    except ReconciliationError as exc:
+        return error(exc.message, exc.status)
+    return jsonify(ok=True, status=appt.status, message="Booking ending recorded. No refund was processed.")
+
+
+@main.route("/api/student/progress", methods=["GET"])
+@login_required
+def student_progress():
+    if current_user.is_admin or "student" not in current_user.roles:
+        return error("Only student accounts can view progress.", 403)
+
+    tz = ZoneInfo("Asia/Manila")
+    now = datetime.now(timezone.utc).astimezone(tz)
+    week_start = now.date() - timedelta(days=now.weekday())
+    events = XpEvent.query.filter_by(user_id=current_user.id).order_by(XpEvent.created_at.asc()).all()
+    total = sum(event.points for event in events)
+    academic = sum(event.points for event in events if event.path == "academic")
+    gaming = sum(event.points for event in events if event.path == "gaming")
+    week_events = [event for event in events if event.created_at.replace(tzinfo=timezone.utc).astimezone(tz).date() >= week_start]
+    academic_week = sum(1 for event in week_events if event.path == "academic")
+    gaming_week = sum(1 for event in week_events if event.path == "gaming")
+    week_paths = {event.path for event in week_events}
+    balance_streak, current_week_balanced = _balance_streak_from_events(events, week_start, tz)
+    levels = [(0, "Beginner"), (100, "Learner"), (250, "Competitor"), (500, "Achiever"), (1000, "Elite Student Gamer")]
+    level_index = max(i for i, (threshold, _) in enumerate(levels) if total >= threshold)
+    level_at, level_name = levels[level_index]
+    next_level = levels[level_index + 1] if level_index + 1 < len(levels) else None
+    level_end = next_level[0] if next_level else level_at + 500
+
+    return jsonify({
+        "ok": True,
+        "timezone": "Asia/Manila",
+        "total_xp": total,
+        "academic_xp": academic,
+        "gaming_xp": gaming,
+        "level": level_index + 1,
+        "level_name": level_name,
+        "next_level_xp": next_level[0] if next_level else None,
+        "level_progress": min(100, round((total - level_at) / (level_end - level_at) * 100)),
+        "quests": {
+            "academic_week": {"count": min(academic_week, 3), "target": 3},
+            "gaming_week": {"count": min(gaming_week, 2), "target": 2},
+            "balanced_week": {"count": len(week_paths), "target": 2},
+            "first_milestone": {"count": min(total, 100), "target": 100},
+        },
+        "badges": {
+            "academic": academic > 0,
+            "gaming": gaming > 0,
+            "combined": academic > 0 and gaming > 0,
+        },
+        "week_start": week_start.isoformat(),
+        "balance_streak_weeks": balance_streak,
+        "current_week_balanced": current_week_balanced,
+        "activity_days": sorted({event.created_at.replace(tzinfo=timezone.utc).astimezone(tz).date().isoformat() for event in week_events}),
+    })
+
+
+@main.route("/api/student/leaderboard-preference", methods=["POST"])
+@login_required
+def update_leaderboard_preference():
+    if current_user.is_admin or "student" not in current_user.roles:
+        return error("Only student accounts can change leaderboard participation.", 403)
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return error("Provide a valid preference object.")
+    opted_in = data.get("opted_in")
+    if not isinstance(opted_in, bool):
+        return error("Choose whether to opt in or out.", field="opted_in")
+    current_user.leaderboard_opt_in = opted_in
+    try:
+        db.session.commit()
+    except SQLAlchemyError:
+        db.session.rollback()
+        return error("Preference could not be saved. Please retry.", 503)
+    return jsonify({"ok": True, "opted_in": current_user.leaderboard_opt_in})
+
+
+@main.route("/api/leaderboard/weekly", methods=["GET"])
+@login_required
+def weekly_leaderboard_data():
+    if current_user.is_admin or "student" not in current_user.roles:
+        return error("Only student accounts can view the leaderboard.", 403)
+    tz = ZoneInfo("Asia/Manila")
+    now = datetime.now(timezone.utc).astimezone(tz)
+    local_start = datetime.combine(now.date() - timedelta(days=now.weekday()), time.min, tzinfo=tz)
+    local_end = local_start + timedelta(days=7)
+    start_utc = local_start.astimezone(timezone.utc).replace(tzinfo=None)
+    end_utc = local_end.astimezone(timezone.utc).replace(tzinfo=None)
+    # Rank in the database, keeping the public result bounded to 50.
+    # Private progress can find the requesting student below that cutoff
+    # without loading every participant into Python.
+    ranking = (
+        db.session.query(
+            User.id.label("user_id"), User.display_name.label("display_name"),
+            func.sum(XpEvent.points).label("weekly_xp"),
+            func.row_number().over(order_by=(
+                func.sum(XpEvent.points).desc(), User.display_name.asc(), User.id.asc(),
+            )).label("rank"),
+        )
+        .join(XpEvent, XpEvent.user_id == User.id)
+        .filter(
+            User.is_active.is_(True),
+            User.is_admin.is_(False),
+            User.leaderboard_opt_in.is_(True),
+            XpEvent.created_at >= start_utc,
+            XpEvent.created_at < end_utc,
+        )
+        .group_by(User.id, User.display_name)
+        .subquery()
+    )
+    rows = db.session.query(ranking).order_by(ranking.c.rank).limit(50).all()
+    own_row = (
+        db.session.query(ranking.c.rank, ranking.c.weekly_xp)
+        .filter(ranking.c.user_id == current_user.id).first()
+        if current_user.leaderboard_opt_in else None
+    )
+    return jsonify({
+        "ok": True,
+        "week_start": local_start.date().isoformat(),
+        "week_end": (local_end.date() - timedelta(days=1)).isoformat(),
+        "timezone": "Asia/Manila",
+        "opted_in": current_user.leaderboard_opt_in,
+        "your_progress": (
+            {"weekly_xp": int(own_row.weekly_xp), "rank": own_row.rank}
+            if own_row else ({"weekly_xp": 0, "rank": None} if current_user.leaderboard_opt_in else None)
+        ),
+        "entries": [
+            {"rank": row.rank, "display_name": row.display_name, "weekly_xp": int(row.weekly_xp)}
+            for row in rows
+        ],
+    })
+
+
 
 
 @main.route("/api/sessions/<int:booking_id>/join", methods=["GET"])
@@ -1251,6 +1934,8 @@ def join_session(booking_id):
         return error("Session not found.", 404)
     if appt.status not in ("accepted", "scheduled") or not appt.meeting_room:
         return error("The mentor has not confirmed this session.", 403)
+    if not appt.payment_satisfied:
+        return error("Payment must be verified before joining.", 403)
     return jsonify({"ok": True, "url": url_for("main.meeting_page", booking_id=appt.id)})
 
 
@@ -1262,6 +1947,8 @@ def meeting_page(booking_id):
         return error("Session not found.", 404)
     if appt.status not in ("accepted", "scheduled") or not appt.meeting_room:
         return error("The mentor has not confirmed this session.", 403)
+    if not appt.payment_satisfied:
+        return error("Payment must be verified before joining.", 403)
     try:
         participant_token = create_jaas_participant_token(appt, current_user)
     except JaasConfigurationError:
@@ -1423,6 +2110,14 @@ def sessions():
     return render_template("shared/sessions.html")
 
 
+@main.route("/leaderboard")
+@login_required
+def leaderboard_page():
+    if current_user.is_admin or "student" not in current_user.roles:
+        return error("Only student accounts can view the leaderboard.", 403)
+    return render_template("student/leaderboard.html")
+
+
 @main.route("/settings")
 @login_required
 def settings():
@@ -1445,7 +2140,7 @@ def help():
 # ============================================================
 
 # Update the import at the top of routes.py to include Report and Message:
-# from .models import Appointment, Credential, Message, Report, RoleApplication, User, utcnow
+# from .models import Appointment, Credential, Message, Report, RoleApplication, RoleApplicationHistory, User, XpEvent, AttendanceEvent, utcnow
 
 # ---------- Pending-provider helper ----------
 
@@ -1656,11 +2351,13 @@ def verification_status():
     pending = RoleApplication.query.filter_by(user_id=current_user.id, status="pending").all()
     approved = RoleApplication.query.filter_by(user_id=current_user.id, status="approved").all()
     rejected = RoleApplication.query.filter_by(user_id=current_user.id, status="rejected").all()
+    revision = RoleApplication.query.filter_by(user_id=current_user.id, status="revision_required").all()
     return jsonify({
         "ok": True,
         "pending_roles": [a.role for a in pending],
         "approved_roles": [a.role for a in approved],
         "rejected_roles": [a.role for a in rejected],
+        "revision_required_roles": [a.role for a in revision],
     })
 
 
@@ -1926,3 +2623,50 @@ def peer_user_search():
         if len(results) >= 10:
             break
     return jsonify({"ok": True, "users": results})
+
+
+@main.after_request
+def private_progress_response(response):
+    if request.endpoint in {"main.student_progress", "main.weekly_leaderboard_data", "main.leaderboard_page", "main.update_leaderboard_preference"}:
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+@main.route("/admin/attendance")
+@admin_required
+def admin_attendance():
+    state = request.args.get("state", "unresolved")
+    if state not in ("unresolved", "resolved"):
+        return error("Choose unresolved or resolved attendance disputes.")
+    query = Appointment.query.filter(Appointment.attendance_disputed_at.is_not(None))
+    query = query.filter(Appointment.attendance_resolved_at.is_(None) if state == "unresolved" else Appointment.attendance_resolved_at.is_not(None))
+    pagination = query.order_by(Appointment.attendance_disputed_at.desc()).paginate(
+        page=request.args.get("page", 1, type=int), per_page=25, error_out=False)
+    return render_template("admin/attendance.html", rows=pagination.items, pagination=pagination,
+                           state=state, format_dt=format_dt_pht)
+
+
+@main.route("/api/admin/attendance/<int:booking_id>/resolve", methods=["POST"])
+@admin_required
+def admin_resolve_attendance(booking_id):
+    if __package__:
+        from .attendance import AttendanceError, resolve_dispute
+    else:
+        from attendance import AttendanceError, resolve_dispute
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return error("Provide a valid resolution object.")
+    appt = Appointment.query.filter_by(id=booking_id).populate_existing().with_for_update().first()
+    if not appt:
+        return error("Booking not found.", 404)
+    try:
+        resolve_dispute(appt, current_user.id, data.get("outcome"), data.get("reason"))
+        db.session.commit()
+    except AttendanceError as exc:
+        db.session.rollback()
+        return error(exc.message, exc.status)
+    except SQLAlchemyError:
+        db.session.rollback()
+        return error("Dispute resolution could not be saved. Please retry.", 503)
+    return jsonify(ok=True, outcome=appt.attendance_resolution, message="Decision recorded. No XP was awarded by this action.")

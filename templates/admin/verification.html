@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>Verification | Admin | Learn2Play</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
   <style>
@@ -77,10 +77,20 @@
       cursor: pointer; transition: all .18s;
     }
     .btn-reject:hover { background: rgba(248,113,113,.22); }
+    .btn-revision {
+      padding: 9px 20px; border-radius: 9px; font-size: 13px; font-weight: 600;
+      background: rgba(124,108,245,.15); color: var(--lavender);
+      border: 1px solid rgba(124,108,245,.35); cursor: pointer;
+    }
+    .btn-revision:hover { background: rgba(124,108,245,.25); }
     .btn-loading { opacity: .6; pointer-events: none; }
 
     .reject-wrap { display: none; flex-direction: column; gap: 8px; margin-top: 2px; }
     .reject-wrap.open { display: flex; }
+    .revision-wrap { display: none; flex-direction: column; gap: 8px; margin-top: 2px; }
+    .revision-wrap.open { display: flex; }
+    .revision-wrap .reject-submit { background: var(--purple); }
+    .revision-help { color: var(--txt3); font-size: 12px; }
     .reject-input {
       width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
       padding: 10px 12px; color: var(--txt); font-size: 13px; resize: vertical; min-height: 70px;
@@ -97,6 +107,7 @@
     }
     .status-pill.approved { background: rgba(74,222,128,.16); color: #4ade80; }
     .status-pill.rejected { background: rgba(248,113,113,.14); color: var(--danger); }
+    .status-pill.revision_required { background: rgba(124,108,245,.18); color: var(--lavender); }
 
     .empty-state { text-align: center; padding: 60px 20px; color: var(--txt3); }
     .empty-state .ei { font-size: 36px; margin-bottom: 10px; }
@@ -132,6 +143,7 @@
       <button class="ftab active" data-status="pending">Pending</button>
       <button class="ftab" data-status="approved">Approved</button>
       <button class="ftab" data-status="rejected">Rejected</button>
+      <button class="ftab" data-status="revision_required">Needs Revision</button>
     </div>
 
     <div class="app-list" id="appList">
@@ -150,12 +162,6 @@ const toast = document.getElementById('toast');
 let csrfToken = '';
 
 async function getCsrfToken() {
-  const meta = document.querySelector('meta[name="csrf-token"]');
-  if (meta && meta.content) {
-    csrfToken = meta.content;
-    return;
-  }
-
   const res = await fetch('/api/csrf-token', {
     credentials: 'same-origin'
   });
@@ -271,11 +277,32 @@ async function getCsrfToken() {
         confirm.textContent = 'Confirm Rejection';
         confirm.addEventListener('click', () => reject(appId, confirm));
         rejectWrap.append(reason, confirm);
-        actions.append(approveButton, rejectButton, rejectWrap);
+        const revisionButton = document.createElement('button');
+        revisionButton.className = 'btn-revision';
+        revisionButton.textContent = 'Request Revision';
+        revisionButton.addEventListener('click', () => toggleRevision(appId));
+        const revisionWrap = document.createElement('div');
+        revisionWrap.className = 'revision-wrap';
+        revisionWrap.id = 'rev-' + appId;
+        const note = document.createElement('textarea');
+        note.className = 'reject-input';
+        note.id = 'revision-note-' + appId;
+        note.maxLength = 500;
+        note.placeholder = 'Explain what the applicant needs to change (10–500 characters)…';
+        const help = document.createElement('span');
+        help.className = 'revision-help';
+        help.textContent = 'Required: 10 to 500 characters.';
+        const confirmRevision = document.createElement('button');
+        confirmRevision.className = 'reject-submit';
+        confirmRevision.textContent = 'Send Revision Request';
+        confirmRevision.addEventListener('click', () => requestRevision(appId, confirmRevision));
+        revisionWrap.append(note, help, confirmRevision);
+        actions.append(approveButton, rejectButton, revisionButton, rejectWrap, revisionWrap);
       } else {
         const status = document.createElement('span');
-        status.className = 'status-pill ' + (['approved', 'rejected'].includes(app.status) ? app.status : '');
-        status.textContent = ['approved', 'rejected'].includes(app.status) ? app.status[0].toUpperCase() + app.status.slice(1) : 'Unknown';
+        const labels = { approved: 'Approved', rejected: 'Rejected', revision_required: 'Needs Revision' };
+        status.className = 'status-pill ' + (Object.hasOwn(labels, app.status) ? app.status : '');
+        status.textContent = labels[app.status] || 'Unknown';
         actions.appendChild(status);
       }
       list.appendChild(card);
@@ -284,6 +311,47 @@ async function getCsrfToken() {
     function toggleReject(id) {
       const rw = document.getElementById('rw-' + id);
       rw.classList.toggle('open');
+      document.getElementById('rev-' + id).classList.remove('open');
+    }
+
+    function toggleRevision(id) {
+      const revision = document.getElementById('rev-' + id);
+      revision.classList.toggle('open');
+      document.getElementById('rw-' + id).classList.remove('open');
+    }
+
+    async function requestRevision(id, btn) {
+      if (btn.classList.contains('btn-loading')) return;
+      const note = document.getElementById('revision-note-' + id).value.trim();
+      if (note.length < 10 || note.length > 500) {
+        showToast('Revision note must contain 10 to 500 characters.', 'err');
+        return;
+      }
+      btn.classList.add('btn-loading');
+      btn.disabled = true;
+      try {
+        await getCsrfToken();
+        const res = await fetch('/api/admin/applications/' + id + '/request-revision', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+          body: JSON.stringify({ note })
+        });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+          document.getElementById('app-' + id).remove();
+          showToast('Revision requested.', 'ok');
+        } else {
+          showToast(data.message || 'Unable to request revision.', 'err');
+          if (res.status === 409) await loadApps(currentStatus);
+        }
+      } catch (err) {
+        console.error(err);
+        showToast('Something went wrong. Please try again.', 'err');
+      } finally {
+        btn.classList.remove('btn-loading');
+        btn.disabled = false;
+      }
     }
 
     async function approve(id, btn) {
@@ -309,6 +377,7 @@ async function getCsrfToken() {
       showToast('Application approved!', 'ok');
     } else {
       showToast(data.message || 'Error.', 'err');
+      if (res.status === 409) await loadApps(currentStatus);
       btn.classList.remove('btn-loading');
       btn.textContent = '✅ Approve';
     }
@@ -344,6 +413,7 @@ async function getCsrfToken() {
       showToast('Application rejected.', 'ok');
     } else {
       showToast(data.message || 'Error.', 'err');
+      if (res.status === 409) await loadApps(currentStatus);
       btn.classList.remove('btn-loading');
     }
   } catch (err) {

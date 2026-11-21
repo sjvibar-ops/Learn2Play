@@ -1,5 +1,4 @@
 const assert = require("node:assert/strict");
-const { File } = require("node:buffer");
 const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
 const { runInNewContext } = require("node:vm");
@@ -31,7 +30,7 @@ async function checkSignup(choices, expectedRoles, expectedError = "") {
           if (selector === 'input[name="roles"]:checked') return roleInputs.filter(input => input.checked);
           return [];
         },
-        focus() {},
+        setAttribute() {}, removeAttribute() {}, focus() {},
         append() {},
       });
     }
@@ -51,34 +50,26 @@ async function checkSignup(choices, expectedRoles, expectedError = "") {
   runInNewContext(source, {
     document, FormData,
     localStorage: { setItem: (key, value) => saved.set(key, value) },
+    window: { location: { assign: () => {} } },
     fetch: async (url, options) => {
+      if (url === "/api/csrf-token") return {ok:true, json:async () => ({csrf_token:"test-csrf"})};
       assert.equal(url, "/api/auth/register");
       requests.push(options.body.getAll("roles"));
-      return { ok: true, json: async () => ({ ok: true, message: "Submitted" }) };
+      return { ok: true, json: async () => ({ ok: true, message: "Submitted", user: {email:"learner@example.test",roles:["student"]} }) };
     },
   });
 
-  const providerApplication = expectedRoles.some(role => role !== "student");
-  assert.equal(classes.has("hidden"), !providerApplication);
+  await getElementById("regForm").listeners.get("submit")({ preventDefault() {} });
+  assert.deepEqual(requests, [[]]);
+  assert.equal(getElementById("submit").disabled, false);
+  const cached = JSON.parse(saved.get("l2_user"));
+  assert.deepEqual(cached.roles, ["student"]);
+  const preference = JSON.parse(saved.get("l2_participation_learner%40example.test"));
   for (const path of ["academic", "gaming"]) {
-    assert.equal(getElementById(path + "Learn").disabled, !choices.includes(path + "Path"));
-    assert.equal(getElementById(path + "Teach").disabled, !choices.includes(path + "Path"));
+    assert.equal(preference.participation[path].enabled, choices.includes(path + "Path"));
+    assert.deepEqual(preference.participation[path].roles, choices.includes(path + "Path") ? ["learn"] : []);
   }
 
-  if (providerApplication) {
-    const proof = new File(["%PDF-1.4"], "certificate.pdf");
-    getElementById("proofs").files = [proof];
-    getElementById("proofs").listeners.get("change")();
-  }
-  await getElementById("regForm").listeners.get("submit")({ preventDefault() {} });
-  assert.equal(roleError.textContent, expectedError);
-  assert.deepEqual(requests, expectedError ? [] : [expectedRoles]);
-  if (!expectedError) {
-    const { participation } = JSON.parse(saved.get("l2_participation_learner%40example.test"));
-    for (const path of ["academic", "gaming"]) {
-      if (!choices.includes(path + "Path")) assert.deepEqual(participation[path], { enabled: false, roles: [] });
-    }
-  }
 }
 
 async function main() {

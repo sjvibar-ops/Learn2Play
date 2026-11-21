@@ -60,6 +60,16 @@ class Config:
     jaas_private_key = os.environ.get("JAAS_PRIVATE_KEY", "").strip()
     JAAS_PRIVATE_KEY = jaas_private_key.replace("\\n", "\n") if jaas_private_key else ""
 
+    # Five credential files of 5 MiB each still fit with multipart overhead.
+    MAX_CONTENT_LENGTH = 32 * 1024 * 1024
+    PAYMENT_REQUEST_MAX_BYTES = 6 * 1024 * 1024
+
+    # Receipts must use a PRIVATE Supabase bucket. QR configuration is public.
+    PAYMENT_RECEIPTS_BUCKET = os.environ.get("PAYMENT_RECEIPTS_BUCKET", "payment-receipts")
+    PAYMENT_QR_URL = os.environ.get("PAYMENT_QR_URL", "")
+    PAYMENT_DEMO = os.environ.get("PAYMENT_DEMO", "true").lower() != "false"
+    PAYMENT_INSTRUCTIONS = os.environ.get("PAYMENT_INSTRUCTIONS", "Use the configured QR in your supported bank or e-wallet app. Enter the exact amount and keep the transaction reference.")
+
     # Database
     database_url = os.environ.get("DATABASE_URL")
     if database_url:
