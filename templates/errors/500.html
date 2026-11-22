@@ -75,6 +75,13 @@
       font-size: 14px;
     }
 
+    .brand-icon {
+      width: 36px;
+      height: 36px;
+      object-fit: contain;
+      flex: 0 0 auto;
+    }
+
     .error-icon {
       width: 76px;
       height: 76px;
@@ -186,7 +193,7 @@
 <body>
   <main class="error-card">
     <a class="brand" href="/">
-      <span class="logo" aria-hidden="true">L2</span>
+      <img class="brand-icon" src="{{ url_for('static', filename='images/learn2play-icon.webp') }}" alt="">
       <span>Learn2Play</span>
     </a>
 
