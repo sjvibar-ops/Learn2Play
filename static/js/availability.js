@@ -17,7 +17,12 @@
     try {
       const data = await fetch("/api/availability").then(r => r.json());
       list.replaceChildren();
-      if (!data.availability?.length) list.textContent = "No weekly availability yet. Add a window above.";
+      if (!data.availability?.length) {
+        const empty = document.createElement("p");
+        empty.className = "availability-empty";
+        empty.textContent = "No weekly availability yet. Add a window above.";
+        list.appendChild(empty);
+      }
       (data.availability || []).forEach(row => {
         const item = document.createElement("div"); item.className = "availability-row";
         const label = document.createElement("span"); label.textContent = `${days[row.weekday]} · ${row.start_time}–${row.end_time}`;
@@ -29,7 +34,13 @@
         });
         item.append(label, remove); list.appendChild(item);
       });
-    } catch (_) { list.textContent = "Could not load availability."; }
+    } catch (_) {
+      list.replaceChildren();
+      const error = document.createElement("p");
+      error.className = "availability-empty availability-empty--error";
+      error.textContent = "Could not load availability. Please refresh and try again.";
+      list.appendChild(error);
+    }
     try {
       const data = await fetch("/api/unavailable-dates").then(r => r.json());
       unavailableList.replaceChildren();

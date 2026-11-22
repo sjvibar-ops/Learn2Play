@@ -10,7 +10,7 @@
 </head>
 <body class="dashboard tutor-profile-body">
   <header class="topbar">
-    <a class="tb-brand" href="{{ url_for('main.dashboard') }}"><div class="logo">L2</div><span class="brand-name">Learn2Play</span></a>
+    <a class="tb-brand" href="{{ url_for('main.dashboard') }}"><img class="brand-icon" src="{{ url_for('static', filename='images/learn2play-icon.webp') }}" alt=""><span class="brand-name">Learn2Play</span></a>
     <nav class="tb-nav" aria-label="Main navigation">
       <a href="{{ url_for('main.dashboard') }}">Dashboard</a>
       <a class="active" href="{{ url_for('main.dashboard', view='browse') }}">Browse educators</a>

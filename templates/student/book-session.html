@@ -9,7 +9,7 @@
 </head>
 <body>
   <header class="book-topbar">
-    <a class="brand" href="{{ url_for('main.dashboard') }}"><span class="brand-mark">L2</span><span>Learn<span>2</span>Play<small>ACADEMY &amp; ESPORTS</small></span></a>
+    <a class="brand" href="{{ url_for('main.dashboard') }}"><img class="brand-icon" src="{{ url_for('static', filename='images/learn2play-icon.webp') }}" alt=""><span>Learn<span>2</span>Play<small>ACADEMY &amp; ESPORTS</small></span></a>
     <nav aria-label="Main navigation"><a href="{{ url_for('main.dashboard') }}">Dashboard</a><a href="{{ url_for('main.dashboard', view='browse') }}">Browse educators</a><a class="active" href="{{ url_for('main.sessions') }}">My sessions</a><a href="{{ url_for('main.messages_page') }}">Messages</a></nav>
     <a class="user-chip" href="{{ url_for('main.profile') }}"><span>{{ current_user.display_name[:1]|upper if current_user.display_name else 'S' }}</span>{{ current_user.display_name or 'Student' }}</a>
   </header>

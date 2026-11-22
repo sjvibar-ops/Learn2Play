@@ -1,7 +1,7 @@
 
 <header class="topbar">
   <a class="tb-brand" href="{{ url_for('main.admin_dashboard') if current_user.is_authenticated and current_user.is_admin else url_for('main.dashboard') }}">
-    <div class="logo">L2</div>
+    <img class="brand-icon" src="{{ url_for('static', filename='images/learn2play-icon.webp') }}" alt="">
     <span class="brand-name">Learn2Play</span>
   </a>
 

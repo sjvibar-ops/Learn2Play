@@ -15,7 +15,6 @@
   {% include '_navbar.html' %}
 
   <!-- ===== Pending Verification Banner ===== -->
-  <p class="form-note" role="status">Manage Mentor and Coach applications in <a href="{{ url_for('main.settings') }}#roles">Settings · Roles &amp; access</a>.</p>
   {% if onboarding_role %}
   <section class="pending-verify-banner" aria-labelledby="provider-onboarding-heading">
     <div>
@@ -119,6 +118,14 @@
       {% endif %}
     </main>
   </div>
+
+  <aside class="provider-application-callout" aria-label="Mentor and coach applications">
+    <div>
+      <strong>Ready to teach or coach?</strong>
+      <p>Manage your Mentor and Coach applications, or check their review status.</p>
+    </div>
+    <a href="{{ url_for('main.settings') }}#roles">Manage applications <span aria-hidden="true">→</span></a>
+  </aside>
 
   <script>window.L2UserId = {{ current_user.id }};</script>
   <script src="{{ url_for('static', filename='js/script.js') }}" defer></script>

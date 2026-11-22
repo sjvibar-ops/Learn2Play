@@ -1,0 +1,156 @@
+/* Balanced, readable educator profile workspace. Loaded after mentor-profile.css. */
+.mentor-profile-shell {
+  width: min(1360px, calc(100% - 56px));
+  padding-top: 28px;
+}
+
+.mentor-profile-workspace {
+  display: grid;
+  grid-template-areas: "main side";
+  grid-template-columns: minmax(0, 1.12fr) minmax(360px, 1fr);
+  align-items: start;
+  gap: 22px;
+}
+
+.mentor-profile-workspace > .mentor-profile-main {
+  grid-area: main;
+  align-self: start;
+}
+
+.mentor-profile-workspace > .mentor-profile-side {
+  grid-area: side;
+  align-self: start;
+}
+
+.mentor-profile-main,
+.mentor-profile-side {
+  align-content: start;
+  gap: 18px;
+}
+
+.mentor-preview-panel,
+.mentor-edit-panel,
+.mentor-side-panel,
+.mentor-metrics {
+  min-width: 0;
+  padding: 22px;
+  border-color: #ffffff12;
+}
+
+.mentor-panel-heading { align-items: center; margin-bottom: 18px; }
+.mentor-panel-heading h2 { font-size: 16px; }
+.mentor-panel-heading p { font-size: 11px; line-height: 1.45; }
+.mentor-panel-heading > a,
+.mentor-manage-link { font-size: 11px; }
+.mentor-panel-icon { width: 34px; height: 34px; font-size: 16px; }
+
+.mentor-public-card {
+  grid-template-columns: 76px minmax(0, 1fr) minmax(130px, auto);
+  gap: 15px;
+  padding: 19px;
+}
+
+.mentor-public-avatar { width: 72px; height: 72px; }
+.mentor-public-copy h2 { font-size: 21px; }
+.mentor-role-pills .role-pill { padding: 4px 8px; font-size: 10px; }
+.mentor-public-copy p { font-size: 12px; line-height: 1.55; -webkit-line-clamp: 3; }
+.mentor-public-email { font-size: 10px; overflow-wrap: anywhere; }
+.mentor-public-rate small,
+.mentor-public-rate span { font-size: 10px; }
+.mentor-public-rate strong { font-size: 21px; }
+.mentor-public-topics .topic-pill,
+.mentor-no-topics { font-size: 10px; }
+.mentor-public-topics .topic-pill { padding: 5px 8px; }
+
+.mentor-edit-toggle,
+.mentor-preview-btn,
+.mentor-save-top { font-size: 11px; }
+.mentor-tag-count { font-size: 10px; }
+.mentor-tags .mentor-tag,
+.mentor-tags p { font-size: 11px; }
+
+.mentor-active-role { gap: 11px; padding: 12px 0; }
+.mentor-active-role > span { width: 36px; height: 36px; font-size: 17px; }
+.mentor-active-role strong,
+.mentor-rate-row { font-size: 12px; }
+.mentor-active-role small,
+.mentor-role-help { font-size: 10px; }
+.mentor-active-role > i { font-size: 9px; }
+.mentor-rate-row { align-items: center; padding: 11px 0; }
+.mentor-rate-row strong { font-size: 12px; }
+.mentor-outline-button { padding: 10px; font-size: 11px; }
+
+.mentor-availability-row { gap: 12px; padding: 10px 0; font-size: 11px; }
+.mentor-availability-row b { width: 32px; height: 32px; font-size: 9px; }
+.mentor-availability-row small { font-size: 10px; }
+.mentor-empty {
+  margin: 0;
+  padding: 13px 14px;
+  border: 1px solid #7779f438;
+  border-radius: 9px;
+  background: #7779f410;
+  color: #c0c4d5;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.mentor-credential-row { gap: 10px; padding: 10px 0; }
+.mentor-credential-row > span { width: 32px; height: 32px; }
+.mentor-credential-row strong { font-size: 10px; }
+.mentor-credential-row small { font-size: 9px; }
+.mentor-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.mentor-metrics > div { padding: 13px; }
+.mentor-metrics strong { font-size: 22px; }
+.mentor-metrics span:not(.mentor-eyebrow) { font-size: 10px; line-height: 1.4; }
+
+.mentor-photo-row strong { font-size: 12px; }
+.mentor-photo-row p { font-size: 10px; }
+.mentor-photo-button,
+.mentor-cancel-btn,
+.mentor-save-button { font-size: 11px; }
+.mentor-field { font-size: 11px; }
+.mentor-field input,
+.mentor-field textarea { font-size: 12px; }
+.mentor-field > small { font-size: 10px; }
+.mentor-form-bottom > p { font-size: 11px; }
+
+@media (max-width: 940px) {
+  .mentor-profile-shell { width: calc(100% - 40px); }
+  .mentor-profile-workspace {
+    grid-template-areas: "main" "side";
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+  .mentor-profile-side { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .mentor-metrics { grid-column: 1 / -1; }
+}
+
+@media (max-width: 640px) {
+  .mentor-profile-shell { width: calc(100% - 28px); padding-top: 18px; }
+  .mentor-profile-workspace { grid-template-areas: "main" "side"; }
+  .mentor-profile-side { grid-template-columns: minmax(0, 1fr); }
+  .mentor-metrics { grid-column: auto; }
+  .mentor-profile-heading { display: grid; gap: 12px; }
+  .mentor-profile-topline { align-items: flex-start; flex-wrap: wrap; margin-bottom: 20px; }
+  .mentor-profile-actions { flex-wrap: wrap; justify-content: flex-start; }
+  .mentor-preview-panel,
+  .mentor-edit-panel,
+  .mentor-side-panel,
+  .mentor-metrics { padding: 17px; }
+  .mentor-public-card { grid-template-columns: 60px minmax(0, 1fr); gap: 12px; padding: 14px; }
+  .mentor-public-avatar { width: 58px; height: 58px; }
+  .mentor-public-copy h2 { font-size: 18px; }
+  .mentor-public-rate {
+    grid-column: 1 / -1;
+    grid-template-columns: auto auto 1fr;
+    justify-items: start;
+    align-items: baseline;
+    padding-top: 12px;
+    border-top: 1px solid #ffffff12;
+  }
+  .mentor-public-rate small { grid-column: 1; }
+  .mentor-public-rate strong { grid-column: 2; grid-row: 1; margin-left: 8px; }
+  .mentor-public-rate span { grid-column: 3; grid-row: 1; align-self: center; }
+  .mentor-public-topics { padding-top: 2px; }
+  .mentor-form-grid { grid-template-columns: minmax(0, 1fr); }
+}
