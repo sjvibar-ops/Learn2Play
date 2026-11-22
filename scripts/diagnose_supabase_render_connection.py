@@ -86,20 +86,67 @@ class Blocked(Exception):
 def parameters(raw):
     normalized = re.sub(r"^postgres(?:ql(?:\+psycopg2?)?)?://", "postgresql://", raw, count=1)
     if not normalized.startswith("postgresql://") or any(c.isspace() for c in normalized):
-        raise Blocked
-    values = conninfo_to_dict(normalized)
-    if (set(values) - {"host", "port", "dbname", "user", "password", "sslmode"}
-            or not re.fullmatch(r"aws-\d+-[a-z0-9-]+\.pooler\.supabase\.com", values.get("host", ""))
-            or values.get("port", "5432") != "5432"
-            or values.get("dbname") != "postgres"
-            or values.get("user") != f"postgres.{PROJECT}"
-            or not values.get("password")
-            or values.get("sslmode", "require") not in {"require", "verify-ca", "verify-full"}):
-        raise Blocked
+        raise Blocked("Invalid connection URL.")
+    try:
+        values = conninfo_to_dict(normalized)
+    except (psycopg.Error, ValueError):
+        raise Blocked("Invalid connection URL.") from None
+    if set(values) - {"host", "port", "dbname", "user", "password", "sslmode"}:
+        raise Blocked("Unexpected connection URL options.")
+    if values.get("host") != "aws-0-ap-northeast-2.pooler.supabase.com":
+        raise Blocked("Unexpected host. Use the approved Development session pooler.")
+    if values.get("port", "5432") != "5432":
+        raise Blocked("Unexpected port. The session pooler requires port 5432.")
+    if values.get("dbname") != "postgres":
+        raise Blocked("Unexpected database name.")
+    if values.get("user") != f"postgres.{PROJECT}":
+        raise Blocked("Unexpected username or Development project reference.")
+    if not values.get("password"):
+        raise Blocked("Invalid connection URL. A password is required.")
+    if values.get("sslmode", "require") not in {"require", "verify-ca", "verify-full"}:
+        raise Blocked("Unsupported TLS mode. Certificate and hostname verification are mandatory.")
     # Pin the Development session pooler and strengthen TLS without printing the URL.
     return dict(values, port=5432, sslmode="verify-full", sslrootcert="system",
                 gssencmode="disable", connect_timeout=8,
                 options="-c default_transaction_read_only=on -c statement_timeout=8000 -c lock_timeout=2000")
+
+
+def database_failure(error, connecting):
+    """Classify known driver failures without returning driver-provided text."""
+    state = error.sqlstate or ""
+    if state.startswith("28"):
+        return "Database authentication failed."
+    if state == "42501":
+        return "PostgreSQL permission or catalog access denied."
+    if state == "25006":
+        return "Read-only transaction setup or verification failed."
+    if state == "57014":
+        return "PostgreSQL query was canceled or timed out."
+    if state == "55P03":
+        return "PostgreSQL lock could not be acquired before the deadline."
+    if connecting:
+        # libpq connection failures frequently have no SQLSTATE. Use only
+        # fixed markers internally. The message may contain a full URL.
+        message = str(error).lower()
+        markers = (
+            (("unsupported startup parameter", "unrecognized startup parameter"), "The pooler rejected a startup parameter."),
+            (("certificate verify failed", "certificate verification failed", "does not match host name",
+              "root certificate", "certificate file", "system root certificates", "unable to get local issuer"),
+             "TLS certificate or hostname verification failed."),
+            (("could not translate host name", "name or service not known", "getaddrinfo",
+              "temporary failure in name resolution", "no such host is known"), "DNS resolution failed."),
+            (("connection timeout", "connection timed out", "timeout expired"), "Database connection timed out."),
+            (("password authentication failed", "authentication failed", "no password supplied",
+              "tenant or user not found"), "Database authentication failed."),
+            (("connection refused",), "Database connection refused."),
+        )
+        if isinstance(error, psycopg.errors.ConnectionTimeout):
+            return "Database connection timed out."
+        for fragments, category in markers:
+            if any(fragment in message for fragment in fragments):
+                return category
+        return "Unexpected connection error (unclassified)."
+    return "PostgreSQL diagnostic query or transaction error (unclassified)."
 
 
 def rows(connection, sql, args=()):
@@ -115,14 +162,14 @@ def inspect(connection):
         if (identity["read_only"], identity["isolation"], identity["database_name"]) != (
             "on", "repeatable read", "postgres"
         ):
-            raise Blocked
+            raise Blocked("Read-only transaction or database identity verification failed.")
         report = {"identity": identity}
         for name, (sql, args) in CHECKS.items():
             try:
                 with connection.transaction():
                     report[name] = rows(connection, sql, args)
-            except psycopg.Error:
-                report[name] = {"status": "unavailable"}
+            except psycopg.Error as error:
+                report[name] = {"status": "unavailable", "reason": database_failure(error, connecting=False)}
         if isinstance(report["roles"], list):
             report["financial_runtime_exists"] = any(
                 role["rolname"] == "learn2play_financial_runtime" for role in report["roles"]
@@ -136,8 +183,8 @@ def inspect(connection):
                     "rows": revisions, "expected": EXPECTED_REVISION,
                     "matches_expected": revisions == [{"version_num": EXPECTED_REVISION}],
                 }
-        except psycopg.Error:
-            report["alembic"] = {"status": "unavailable"}
+        except psycopg.Error as error:
+            report["alembic"] = {"status": "unavailable", "reason": database_failure(error, connecting=False)}
         return report
     finally:
         connection.rollback()
@@ -145,26 +192,40 @@ def inspect(connection):
 
 def main(environ=None):
     environ = os.environ if environ is None else environ
+    connecting = False
     try:
         # libpq environment defaults can override connection routing, TLS and options.
         if any(key.upper().startswith("PG") for key in environ):
-            raise Blocked
-        raw = environ.get("DATABASE_URL") or read_development_url()
+            raise Blocked("Conflicting PostgreSQL environment configuration.")
+        raw = environ.get("DATABASE_URL")
         if not raw:
-            raise Blocked
+            try:
+                raw = read_development_url()
+            except Exception:
+                raise Blocked("Secure console input failed. Use an interactive Windows console.") from None
+        if not raw:
+            raise Blocked("Missing database connection URL.")
         options = parameters(raw)
+        connecting = True
         with psycopg.connect(**options, row_factory=dict_row) as connection:
+            connecting = False
             report = inspect(connection)
         output = json.dumps(report, indent=2, ensure_ascii=True)
         # Catalog text is normally identifiers. Refuse output if it includes supplied secrets.
         if any(secret and secret in output for secret in {raw, options["password"]}):
-            raise Blocked
+            raise Blocked("Diagnostic output withheld because it may contain sensitive text.")
         print(output)
         return 0
-    except (Exception, KeyboardInterrupt):
-        print("Diagnostic stopped. Check the secure console, Development session pooler URL, "
-              "verified TLS, and read-only connection availability.", file=sys.stderr)
-        return 1
+    except Blocked as error:
+        category = str(error)
+    except psycopg.Error as error:
+        category = database_failure(error, connecting)
+    except KeyboardInterrupt:
+        category = "Diagnostic canceled."
+    except Exception:
+        category = "Unexpected diagnostic error (unclassified)."
+    print(f"Diagnostic stopped. {category}", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":

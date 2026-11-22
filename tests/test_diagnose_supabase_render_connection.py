@@ -75,7 +75,9 @@ def test_catalog_only_and_transaction_rollback():
     connection = Connection()
     report = diagnostic.inspect(connection)
     assert connection.rolled_back
-    assert report["tables"] == {"status": "unavailable"}
+    assert report["tables"] == {
+        "status": "unavailable", "reason": "PostgreSQL permission or catalog access denied.",
+    }
     assert report["alembic"]["matches_expected"]
     assert report["financial_runtime_exists"] is False
 
@@ -87,3 +89,75 @@ def test_success_output_has_no_connection_arguments(monkeypatch, capsys):
     assert URL not in captured.out + captured.err
     assert "secret-example" not in captured.out + captured.err
     assert "repeatable read" in captured.out
+
+
+@pytest.mark.parametrize(("url", "category"), [
+    ("bogus://secret-example", "Invalid connection URL"),
+    ("postgresql://[invalid:secret-example", "Invalid connection URL"),
+    (URL.replace("aws-0", "aws-1"), "Unexpected host"),
+    (URL.replace(":5432", ":6543"), "Unexpected port"),
+    (URL.replace("/postgres?", "/other?"), "Unexpected database"),
+    (URL.replace(diagnostic.PROJECT, "wrongproject"), "Unexpected username"),
+    (URL + "&hostaddr=127.0.0.1", "Unexpected connection URL options"),
+    (URL.replace("sslmode=require", "sslmode=disable"), "Unsupported TLS mode"),
+])
+def test_reports_target_rejection_without_connecting(url, category, monkeypatch, capsys):
+    monkeypatch.setattr(diagnostic.psycopg, "connect", lambda **_: pytest.fail("unexpected connection"))
+    assert diagnostic.main({"DATABASE_URL": url}) == 1
+    output = capsys.readouterr().err
+    assert category in output
+    assert url not in output and "secret-example" not in output
+
+
+@pytest.mark.parametrize(("failure_type", "message", "category"), [
+    (psycopg.OperationalError, "certificate verify failed", "TLS certificate or hostname verification failed"),
+    (psycopg.OperationalError, "could not translate host name", "DNS resolution failed"),
+    (psycopg.errors.ConnectionTimeout, "", "Database connection timed out"),
+    (psycopg.errors.InvalidPassword, "", "Database authentication failed"),
+    (psycopg.OperationalError, "password authentication failed", "Database authentication failed"),
+    (psycopg.errors.InsufficientPrivilege, "", "PostgreSQL permission or catalog access denied"),
+    (psycopg.errors.ReadOnlySqlTransaction, "", "Read-only transaction setup or verification failed"),
+    (psycopg.errors.QueryCanceled, "", "PostgreSQL query was canceled or timed out"),
+    (psycopg.errors.LockNotAvailable, "", "PostgreSQL lock could not be acquired"),
+    (psycopg.OperationalError, "connection refused", "Database connection refused"),
+    (psycopg.OperationalError, "unsupported startup parameter: options", "The pooler rejected a startup parameter"),
+    (psycopg.OperationalError, "unrecognized error", "Unexpected connection error (unclassified)"),
+])
+def test_driver_failures_use_fixed_categories(failure_type, message, category, monkeypatch, capsys):
+    def fail(**kwargs):
+        assert kwargs["sslmode"] == "verify-full"
+        assert kwargs["sslrootcert"] == "system"
+        raise failure_type(f"{message} {URL}")
+
+    monkeypatch.setattr(diagnostic.psycopg, "connect", fail)
+    assert diagnostic.main({"DATABASE_URL": URL}) == 1
+    output = capsys.readouterr().err
+    assert category in output
+    assert URL not in output and "secret-example" not in output
+
+
+def test_wrong_transaction_state_stops_before_catalog_access(monkeypatch, capsys):
+    connection = Connection()
+
+    def fake_rows(_, statement, args=()):
+        assert statement == diagnostic.IDENTITY
+        return [{"read_only": "off", "isolation": "repeatable read", "database_name": "postgres"}]
+
+    monkeypatch.setattr(diagnostic, "rows", fake_rows)
+    monkeypatch.setattr(diagnostic.psycopg, "connect", lambda **_: nullcontext(connection))
+    assert diagnostic.main({"DATABASE_URL": URL}) == 1
+    assert connection.rolled_back
+    assert "Read-only transaction or database identity verification failed" in capsys.readouterr().err
+
+
+def test_console_and_environment_errors_are_sanitized(monkeypatch, capsys):
+    def fail():
+        raise OSError(URL)
+
+    monkeypatch.setattr(diagnostic, "read_development_url", fail)
+    assert diagnostic.main({}) == 1
+    assert diagnostic.main({"PGHOSTADDR": "secret-example"}) == 1
+    output = capsys.readouterr().err
+    assert "Secure console input failed" in output
+    assert "Conflicting PostgreSQL environment configuration" in output
+    assert URL not in output and "secret-example" not in output
