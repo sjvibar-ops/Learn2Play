@@ -1,4 +1,4 @@
-from contextlib import redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from io import StringIO
 import json
 import os
@@ -33,6 +33,73 @@ class DevelopmentBackupTests(unittest.TestCase):
                 backup.development.connection_parameters(
                     f"postgresql://fixture:{PASSWORD}@{host}:{port}/postgres", self.args, conninfo_to_dict,
                 )
+
+    def read_console_fixture(self, line):
+        kernel = Mock()
+
+        def read(handle, buffer, capacity, received, reserved):
+            self.assertLess(len(line), capacity)
+            buffer.value = line
+            received._obj.value = len(line)
+            return True
+
+        kernel.ReadConsoleW.side_effect = read
+        with patch.dict(backup.read_development_url.__globals__, {
+            "hidden_windows_console": lambda: nullcontext((kernel, 123)),
+        }), redirect_stderr(StringIO()) as output:
+            try:
+                return backup.read_development_url()
+            finally:
+                self.assertNotIn(PASSWORD, output.getvalue())
+
+    def test_complete_hidden_url_reaches_the_validator(self):
+        host = "aws-0-ap-northeast-2.pooler.supabase.com"
+        user = f"fixture.{backup.catalog.DEVELOPMENT}"
+        url = f"postgresql://{user}:{PASSWORD}@{host}:5432/postgres?sslmode=verify-full"
+        args = SimpleNamespace(expected_host=host, expected_port=5432, expected_runtime_role="fixture")
+        result = backup.development.connection_parameters(
+            self.read_console_fixture(url + "\r\n"), args, conninfo_to_dict,
+        )
+        self.assertEqual((result["host"], result["port"], result["user"]), (host, 5432, user))
+        self.assertEqual(result["password"], PASSWORD)
+
+    def test_incomplete_empty_or_padded_console_input_is_redacted(self):
+        url = f"postgresql://fixture:{PASSWORD}@{self.host}:5432/postgres"
+        for line in (url, "\r\n", " " + url + "\r\n", url + " \r\n"):
+            with self.assertRaises(Blocked) as failure:
+                self.read_console_fixture(line)
+            self.assertNotIn(PASSWORD, str(failure.exception))
+
+    def test_malformed_truncated_and_unexpected_options_are_redacted(self):
+        url = f"postgresql://fixture:{PASSWORD}@{self.host}:5432/postgres"
+        for candidate in (f"postgresql://fixture:{PASSWORD}@[", url.removesuffix("/postgres"),
+                          url + "?options=-csearch_path%3Dpublic"):
+            with self.assertRaises(Blocked) as failure:
+                backup.development.connection_parameters(
+                    self.read_console_fixture(candidate + "\r\n"), self.args, conninfo_to_dict,
+                )
+            self.assertNotIn(PASSWORD, str(failure.exception))
+
+    def test_no_secure_console_fails_before_prompting(self):
+        with patch.object(backup.sys.stdin, "isatty", return_value=False), redirect_stderr(StringIO()) as output:
+            with self.assertRaisesRegex(Blocked, "interactive Windows console"):
+                backup.read_development_url()
+        self.assertEqual(output.getvalue(), "")
+
+    @unittest.skipUnless(os.name == "nt", "Windows console API")
+    def test_console_echo_is_disabled_and_mode_restored_on_error(self):
+        kernel = Mock()
+        kernel.GetConsoleMode.side_effect = lambda handle, mode: setattr(mode._obj, "value", 0x207) or True
+        terminal = Mock()
+        with patch.object(backup.sys, "stdin", terminal), patch.object(backup.sys, "stderr", terminal), \
+                patch.object(backup.ctypes, "WinDLL", return_value=kernel), \
+                patch("msvcrt.get_osfhandle", return_value=123):
+            with self.assertRaisesRegex(RuntimeError, "read failed"):
+                with backup.hidden_windows_console():
+                    kernel.SetConsoleMode.assert_called_once_with(123, 0x003)
+                    raise RuntimeError("read failed")
+        self.assertEqual([call.args for call in kernel.SetConsoleMode.call_args_list],
+                         [(123, 0x003), (123, 0x207)])
 
     def test_missing_tools_and_existing_destination(self):
         with TemporaryDirectory() as root:
@@ -88,7 +155,8 @@ class DevelopmentBackupTests(unittest.TestCase):
                 def run(tool, arguments, env=None):
                     self.assertNotIn(PASSWORD, str(arguments))
                     if tool == dump:
-                        self.assertEqual(env["PGPASSWORD"], PASSWORD)
+                        self.assertIsNone(env)
+                        self.assertIn("--password", arguments)
                         self.assertIn("--snapshot=00000001-00000002-1", arguments)
                     if tool == failure:
                         raise Blocked("offline command failure")
@@ -96,6 +164,7 @@ class DevelopmentBackupTests(unittest.TestCase):
 
                 with patch.dict(backup.create_archive.__globals__, {
                     "run_tool": run, "create_restricted_directory": Mock(),
+                    "hidden_windows_console": nullcontext,
                     "verify_scope": Mock(return_value=set()), "write_manifest": finalize,
                 }), self.assertRaises(Blocked):
                     backup.create_archive(Path("unused"), (dump, restore), parameters, self.args,
@@ -171,6 +240,7 @@ class DevelopmentBackupTests(unittest.TestCase):
                 checksum = Mock()
                 with patch.dict(backup.create_archive.__globals__, {
                     "create_restricted_directory": Mock(), "verify_scope": Mock(return_value=set()),
+                    "hidden_windows_console": nullcontext,
                     "archive_checksum": checksum,
                 }), patch.object(backup.subprocess, "run", side_effect=[
                     SimpleNamespace(returncode=0, stderr=b"", stdout=b""),

@@ -1,9 +1,9 @@
 """Create a restricted logical archive of the reviewed Development baseline."""
 
+from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
 from datetime import datetime, timezone
-import getpass
 import hashlib
 import json
 import os
@@ -11,7 +11,6 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import warnings
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import supabase_development_preflight as development
@@ -158,6 +157,59 @@ def create_restricted_directory(path):
         free(descriptor)
 
 
+@contextmanager
+def hidden_windows_console():
+    error = "Secure input requires an interactive Windows console. Open PowerShell in Windows Terminal or Console Host."
+    if os.name != "nt" or not sys.stdin.isatty() or not sys.stderr.isatty():
+        raise catalog.Blocked(error)
+    import msvcrt
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetConsoleMode.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel.SetConsoleMode.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel.FlushConsoleInputBuffer.argtypes = (wintypes.HANDLE,)
+    handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+    mode = wintypes.DWORD()
+    if not kernel.GetConsoleMode(handle, ctypes.byref(mode)):
+        raise catalog.Blocked(error)
+    # Cooked Unicode line input, with echo and virtual-terminal input disabled.
+    hidden_mode = (mode.value | 0x0003) & ~0x0204
+    if not kernel.SetConsoleMode(handle, hidden_mode):
+        raise catalog.Blocked(error)
+    try:
+        yield kernel, handle
+    finally:
+        # Do not let queued text from an interrupted or multi-line paste reach PowerShell.
+        drained = kernel.FlushConsoleInputBuffer(handle)
+        if not kernel.SetConsoleMode(handle, mode.value):
+            raise catalog.Blocked("Could not restore Windows console input mode.")
+        if not drained:
+            raise catalog.Blocked("Could not clear queued Windows console input.")
+
+
+def read_development_url():
+    with hidden_windows_console() as (kernel, handle):
+        read = kernel.ReadConsoleW
+        read.argtypes = (wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+                         ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID)
+        buffer = ctypes.create_unicode_buffer(32768)
+        received = wintypes.DWORD()
+        print("Development DATABASE_URL (hidden): ", end="", file=sys.stderr, flush=True)
+        try:
+            if not read(handle, buffer, len(buffer), ctypes.byref(received), None):
+                raise catalog.Blocked("Secure Windows console read failed. No connection attempted.")
+            line = buffer[:received.value]
+        finally:
+            ctypes.memset(ctypes.addressof(buffer), 0, ctypes.sizeof(buffer))
+            print(file=sys.stderr)
+    if not line.endswith("\r\n"):
+        raise catalog.Blocked("The Windows console did not return a complete URL line.")
+    raw = line[:-2]
+    if not raw or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in raw):
+        raise catalog.Blocked("Enter one non-empty PostgreSQL URL without raw whitespace or control characters.")
+    return raw
+
+
 def run_tool(tool, arguments, env=None, *, discard_stdout=False):
     result = subprocess.run(
         [str(tool), *arguments], env=env, stdout=subprocess.DEVNULL if discard_stdout else subprocess.PIPE,
@@ -264,16 +316,15 @@ def create_archive(destination, tool_pair, parameters, args, connect, row_factor
             if not re.fullmatch(r"[A-Fa-f0-9]+-[A-Fa-f0-9]+-\d+", snapshot):
                 raise catalog.Blocked("Could not verify an export snapshot.")
             create_restricted_directory(destination)
-            child_env = dict(os.environ, PGPASSWORD=parameters["password"])
-            try:
-                conninfo = make_conninfo(**{name: value for name, value in parameters.items() if name != "password"})
+            conninfo = make_conninfo(**{name: value for name, value in parameters.items() if name != "password"})
+            print("Enter the Development SQL password again at the pg_dump prompt.", file=sys.stderr, flush=True)
+            # Keep echo off even if pg_dump falls back to standard input.
+            with hidden_windows_console():
                 run_tool(dump, [
-                    "--no-password", "--format=custom", "--schema=public", "--strict-names",
+                    "--password", "--format=custom", "--schema=public", "--strict-names",
                     "--no-publications", "--no-subscriptions", "--lock-wait-timeout=10s",
                     f"--snapshot={snapshot}", f"--file={archive}", f"--dbname={conninfo}",
-                ], child_env)
-            finally:
-                child_env.pop("PGPASSWORD", None)
+                ])
         finally:
             connection.execute("ROLLBACK")
     verify_archive(restore, archive, sequences)
@@ -307,11 +358,7 @@ def main():
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
     from psycopg.rows import dict_row
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", getpass.GetPassWarning)
-        parameters = development.connection_parameters(
-            getpass.getpass("Development DATABASE_URL containing the password (hidden): "), args, conninfo_to_dict,
-        )
+    parameters = development.connection_parameters(read_development_url(), args, conninfo_to_dict)
     create_archive(destination, tool_pair, parameters, args, connect, dict_row, make_conninfo)
     print("ARCHIVE CREATED AND VERIFIED. Restore verification requires a separate approved restore.")
 
