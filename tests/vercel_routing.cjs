@@ -11,18 +11,18 @@ function evaluateConfig(environment) {
   }
   return spawnSync(process.execPath, [
     '--input-type=module', '--eval',
-    "import { config } from './vercel.mjs'; console.log(JSON.stringify(config));",
+    "import * as routing from './vercel.mjs'; console.log(JSON.stringify({ exports: Object.keys(routing), config: routing.config }));",
   ], { cwd: resolve(__dirname, '..'), env, encoding: 'utf8' });
 }
 
-for (const [environment, origin] of [
-  ['preview', 'https://learn2play-staging.onrender.com'],
-  ['production', 'https://learn2play.onrender.com'],
-]) {
-  test(`${environment} emits the existing native catch-all for its own origin`, () => {
+const origin = 'https://learn2play-staging.onrender.com';
+
+for (const environment of ['preview', 'production', undefined, '', 'development', 'staging', 'constructor']) {
+  test(`VERCEL_ENV ${JSON.stringify(environment)} uses the Staging catch-all`, () => {
     const result = evaluateConfig(environment);
     assert.equal(result.status, 0, result.stderr);
-    const config = JSON.parse(result.stdout);
+    const { exports, config } = JSON.parse(result.stdout);
+    assert.deepEqual(exports, ['config']);
     assert.deepEqual(config, {
       version: 2,
       rewrites: [{ source: '/:path*', destination: `${origin}/:path*` }],
@@ -44,14 +44,5 @@ for (const [environment, origin] of [
       target.search = request.search;
       assert.equal(target.href, `${origin}${path}`);
     }
-  });
-}
-
-for (const environment of [undefined, '', 'development', 'staging', 'constructor']) {
-  test(`rejects VERCEL_ENV ${JSON.stringify(environment)}`, () => {
-    const result = evaluateConfig(environment);
-    assert.equal(result.status, 1, result.stderr);
-    assert.equal(result.stdout, '');
-    assert.match(result.stderr, /Set VERCEL_ENV to preview or production/);
   });
 }
