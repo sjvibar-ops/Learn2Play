@@ -133,12 +133,37 @@ class DevelopmentBackupTests(unittest.TestCase):
             with self.subTest(override=override), patch.dict(rows[0], override), self.assertRaises(Blocked):
                 backup.verify_scope(connection, self.identity, self.args)
 
-    def test_tool_failure_and_warning_are_redacted(self):
-        for result in (SimpleNamespace(returncode=1, stderr=b"", stdout=PASSWORD.encode()),
-                       SimpleNamespace(returncode=0, stderr=PASSWORD.encode(), stdout=b"")):
-            with patch.object(backup.subprocess, "run", return_value=result), self.assertRaises(Blocked) as raised:
-                backup.run_tool(Path("pg_dump.exe"), [])
-            self.assertNotIn(PASSWORD, str(raised.exception))
+    def test_tool_accepts_success_with_or_without_stderr(self):
+        for stderr in (b"", b"Password: ", b"pg_dump: warning: benign fixture"):
+            with self.subTest(stderr=stderr), patch.object(backup.subprocess, "run", return_value=SimpleNamespace(
+                returncode=0, stderr=stderr, stdout=b"fixture-output",
+            )), redirect_stdout(StringIO()) as output, redirect_stderr(StringIO()) as errors:
+                self.assertEqual(backup.run_tool(Path("pg_dump.exe"), []), b"fixture-output")
+            self.assertEqual((output.getvalue(), errors.getvalue()), ("", ""))
+
+    def test_tool_failure_reports_only_exit_code_and_safe_category(self):
+        secret_detail = f"postgresql://fixture:{PASSWORD}@example.invalid/postgres"
+        cases = (
+            ("pg_dump", 7, "", "no error details"),
+            ("pg_dump", 1, f"pg_dump: error: password authentication failed {secret_detail}", "authentication"),
+            ("pg_dump", 2, f"unclassified detail {secret_detail}", "reported an error"),
+            ("pg_dump", 0, f"pg_dump: error: invalid snapshot identifier {secret_detail}", "snapshot"),
+            ("pg_restore", 0, f"pg_restore: warning: errors ignored on restore: 2 {secret_detail}", "reported an error"),
+        )
+        for tool, code, stderr, reason in cases:
+            with self.subTest(tool=tool, code=code), patch.object(
+                backup.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=code, stderr=stderr.encode(), stdout=secret_detail.encode(),
+                ),
+            ), self.assertRaises(Blocked) as raised:
+                backup.run_tool(Path(f"{tool}.exe"), [])
+            message = str(raised.exception)
+            self.assertIn(f"{tool} failed (exit code {code})", message)
+            self.assertIn(reason, message)
+            self.assertNotIn(PASSWORD, message)
+            self.assertNotIn(secret_detail, message)
+            if stderr:
+                self.assertNotIn(stderr, message)
 
     def test_dump_or_listing_failure_does_not_finalize(self):
         dump, restore = Path("pg_dump.exe"), Path("pg_restore.exe")
@@ -171,6 +196,35 @@ class DevelopmentBackupTests(unittest.TestCase):
                                           connect, None, make_conninfo)
                 finalize.assert_not_called()
                 self.assertEqual(connection.execute.call_args.args, ("ROLLBACK",))
+
+    def test_failed_dump_retains_partial_archive_without_manifest(self):
+        dump, restore = Path("pg_dump.exe"), Path("pg_restore.exe")
+        parameters = dict(host=self.host, user="fixture", password=PASSWORD,
+                          dbname="postgres", sslmode="verify-full")
+        connection = MagicMock()
+        connection.pgconn.ssl_in_use = True
+        connection.execute.return_value.fetchone.return_value = {"snapshot": "00000001-00000002-1"}
+        connect = MagicMock()
+        connect.return_value.__enter__.return_value = connection
+        with TemporaryDirectory() as root:
+            destination = Path(root)
+            archive = destination / "development.dump.partial"
+
+            def failed_dump(*args, **kwargs):
+                archive.touch()
+                return SimpleNamespace(returncode=1, stderr=b"", stdout=b"")
+
+            with patch.dict(backup.create_archive.__globals__, {
+                "create_restricted_directory": Mock(), "verify_scope": Mock(return_value=set()),
+                "hidden_windows_console": nullcontext,
+            }), patch.object(backup.subprocess, "run", side_effect=failed_dump) as run:
+                with self.assertRaisesRegex(Blocked, "pg_dump failed"):
+                    backup.create_archive(destination, (dump, restore), parameters, self.args,
+                                          connect, None, make_conninfo)
+            run.assert_called_once()
+            self.assertEqual({path.name for path in destination.iterdir()}, {archive.name})
+            self.assertEqual(archive.stat().st_size, 0)
+            self.assertEqual(connection.execute.call_args.args, ("ROLLBACK",))
 
     def test_incomplete_listing_stops(self):
         listing = b"".join(f"1; 0 1 TABLE DATA public {name} owner\n".encode() for name in backup.TABLES)

@@ -215,8 +215,36 @@ def run_tool(tool, arguments, env=None, *, discard_stdout=False):
         [str(tool), *arguments], env=env, stdout=subprocess.DEVNULL if discard_stdout else subprocess.PIPE,
         stderr=subprocess.PIPE, check=False,
     )
-    if result.returncode or result.stderr:
-        raise catalog.Blocked(f"{tool.stem} failed or emitted a warning. Tool details suppressed.")
+    diagnostics = result.stderr.lower()
+    reports_error = re.search(
+        rb"(?m)^\s*(?:pg_dump(?:all)?(?:\.exe)?|pg_restore(?:\.exe)?):"
+        rb"\s*(?:(?:error|fatal):|warning: errors ignored on restore: [1-9])",
+        diagnostics,
+    )
+    if result.returncode or reports_error:
+        # Match fixed markers internally. Never include raw tool output in an error.
+        categories = (
+            ((b"password authentication failed", b"no password supplied", b"no pg_hba.conf entry"),
+             "Database authentication or access was rejected."),
+            ((b"certificate verify failed", b"server certificate", b"root certificate", b"ssl error"),
+             "TLS certificate or connection verification failed."),
+            ((b"invalid snapshot identifier", b"snapshot has been invalidated", b"could not import snapshot"),
+             "The exported snapshot could not be reused."),
+            ((b"lock timeout", b"could not obtain lock"), "A database lock could not be acquired."),
+            ((b"server version mismatch", b"aborting because of server version mismatch"),
+             "The database server and dump tool versions are incompatible."),
+            ((b"connection refused", b"connection timed out", b"could not translate host name"),
+             "The database connection could not be established."),
+            ((b"no space left on device", b"disk full"), "The output volume ran out of space."),
+            ((b"permission denied",), "The tool reported a permission error."),
+            ((b"unexpected end of file", b"could not read from input file", b"decompress"),
+             "The archive could not be read completely."),
+        )
+        explanation = next(
+            (message for markers, message in categories if any(marker in diagnostics for marker in markers)),
+            "The tool reported an error." if diagnostics.strip() else "The tool supplied no error details.",
+        )
+        raise catalog.Blocked(f"{tool.stem} failed (exit code {result.returncode}). {explanation}")
     return result.stdout
 
 
