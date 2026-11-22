@@ -28,6 +28,12 @@ for (const [environment, origin] of [
       rewrites: [{ source: '/:path*', destination: `${origin}/:path*` }],
     });
 
+    const rewrite = config.rewrites[0];
+    assert.ok(Object.hasOwn(rewrite, 'destination'));
+    const template = new URL(rewrite.destination);
+    assert.equal(template.protocol, 'https:');
+    assert.equal(template.pathname, '/:path*');
+
     // Check the route template contract. Vercel performs the actual forwarding.
     const { destination } = config.rewrites[0];
     for (const path of ['/', '/static/js/sessions.js', '/api/bookings',
