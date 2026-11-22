@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 import re
+import ssl
+import stat
 import sys
 
 import psycopg
@@ -15,6 +17,7 @@ from supabase_development_backup import read_development_url
 
 PROJECT = "pxiwoowpoewxvnsjwfdw"
 EXPECTED_REVISION = "d2b7a4e9310c"
+CA_FILE_ENV = "LEARN2PLAY_SUPABASE_CA_FILE"
 ROLES = ("anon", "authenticated", "service_role", "postgres", "learn2play_financial_runtime")
 IDENTITY = """
 SELECT current_database() AS database_name, current_user AS effective_role,
@@ -83,7 +86,33 @@ class Blocked(Exception):
     """A diagnostic safety gate was not satisfied."""
 
 
-def parameters(raw):
+def root_certificate(environ):
+    configured = environ.get(CA_FILE_ENV)
+    if configured is None:
+        if any(key.upper() in {"SSL_CERT_FILE", "SSL_CERT_DIR"} for key in environ):
+            raise Blocked("OpenSSL default trust is overridden. Use the dedicated Development CA file setting.")
+        return "system"
+
+    path = Path(configured)
+    if not path.is_absolute() or configured.startswith(("//", chr(92) * 2)) or chr(0) in configured:
+        raise Blocked("Invalid Development CA configuration. Supply an absolute local file path.")
+    try:
+        if not stat.S_ISREG(path.stat().st_mode):
+            raise Blocked("Invalid Development CA configuration. Supply a regular PEM CA file.")
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.load_verify_locations(cafile=str(path))
+    except FileNotFoundError:
+        raise Blocked("Development CA file is missing.") from None
+    except ssl.SSLError:
+        raise Blocked("Invalid Development CA file. Expected a readable PEM CA certificate.") from None
+    except OSError:
+        raise Blocked("Development CA file could not be read.") from None
+    if not context.cert_store_stats()["x509_ca"]:
+        raise Blocked("Invalid Development CA file. No CA certificate was found.")
+    return str(path)
+
+
+def parameters(raw, root_cert="system"):
     normalized = re.sub(r"^postgres(?:ql(?:\+psycopg2?)?)?://", "postgresql://", raw, count=1)
     if not normalized.startswith("postgresql://") or any(c.isspace() for c in normalized):
         raise Blocked("Invalid connection URL.")
@@ -106,7 +135,7 @@ def parameters(raw):
     if values.get("sslmode", "require") not in {"require", "verify-ca", "verify-full"}:
         raise Blocked("Unsupported TLS mode. Certificate and hostname verification are mandatory.")
     # Pin the Development session pooler and strengthen TLS without printing the URL.
-    return dict(values, port=5432, sslmode="verify-full", sslrootcert="system",
+    return dict(values, port=5432, sslmode="verify-full", sslrootcert=root_cert,
                 gssencmode="disable", connect_timeout=8,
                 options="-c default_transaction_read_only=on -c statement_timeout=8000 -c lock_timeout=2000")
 
@@ -130,9 +159,22 @@ def database_failure(error, connecting):
         message = str(error).lower()
         markers = (
             (("unsupported startup parameter", "unrecognized startup parameter"), "The pooler rejected a startup parameter."),
-            (("certificate verify failed", "certificate verification failed", "does not match host name",
-              "root certificate", "certificate file", "system root certificates", "unable to get local issuer"),
-             "TLS certificate or hostname verification failed."),
+            (("does not match host name", "hostname mismatch", "does not match any host name"),
+             "TLS hostname verification failed."),
+            (("could not load system root certificate paths",),
+             "OpenSSL could not load its default CA trust paths."),
+            (("root certificate file", "locate root certificate"),
+             "TLS root certificate file is missing or could not be loaded."),
+            (("certificate has expired", "certificate expired"),
+             "TLS certificate in the chain has expired."),
+            (("certificate is not yet valid",), "TLS certificate in the chain is not yet valid."),
+            (("unable to get local issuer", "unable to verify the first certificate",
+              "self-signed certificate", "self signed certificate", "certificate untrusted"),
+             "TLS certificate chain could not be linked to a trusted CA."),
+            (("invalid ca certificate", "certificate signature failure", "invalid certificate chain"),
+             "TLS certificate chain validation failed."),
+            (("certificate verify failed", "certificate verification failed", "certificate file"),
+             "TLS certificate or hostname verification failed (detail unavailable)."),
             (("could not translate host name", "name or service not known", "getaddrinfo",
               "temporary failure in name resolution", "no such host is known"), "DNS resolution failed."),
             (("connection timeout", "connection timed out", "timeout expired"), "Database connection timed out."),
@@ -205,7 +247,7 @@ def main(environ=None):
                 raise Blocked("Secure console input failed. Use an interactive Windows console.") from None
         if not raw:
             raise Blocked("Missing database connection URL.")
-        options = parameters(raw)
+        options = parameters(raw, root_certificate(environ))
         connecting = True
         with psycopg.connect(**options, row_factory=dict_row) as connection:
             connecting = False

@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+from unittest.mock import Mock
 
 import psycopg
 import pytest
@@ -110,7 +111,13 @@ def test_reports_target_rejection_without_connecting(url, category, monkeypatch,
 
 
 @pytest.mark.parametrize(("failure_type", "message", "category"), [
-    (psycopg.OperationalError, "certificate verify failed", "TLS certificate or hostname verification failed"),
+    (psycopg.OperationalError, "certificate verify failed", "TLS certificate or hostname verification failed (detail unavailable)"),
+    (psycopg.OperationalError, "could not load system root certificate paths", "OpenSSL could not load its default CA trust paths"),
+    (psycopg.OperationalError, "root certificate file does not exist", "TLS root certificate file is missing"),
+    (psycopg.OperationalError, "certificate has expired", "TLS certificate in the chain has expired"),
+    (psycopg.OperationalError, "certificate does not match host name", "TLS hostname verification failed"),
+    (psycopg.OperationalError, "unable to get local issuer certificate", "could not be linked to a trusted CA"),
+    (psycopg.OperationalError, "invalid CA certificate", "TLS certificate chain validation failed"),
     (psycopg.OperationalError, "could not translate host name", "DNS resolution failed"),
     (psycopg.errors.ConnectionTimeout, "", "Database connection timed out"),
     (psycopg.errors.InvalidPassword, "", "Database authentication failed"),
@@ -161,3 +168,61 @@ def test_console_and_environment_errors_are_sanitized(monkeypatch, capsys):
     assert "Secure console input failed" in output
     assert "Conflicting PostgreSQL environment configuration" in output
     assert URL not in output and "secret-example" not in output
+
+
+def test_explicit_ca_passed_to_libpq_without_changing_hostname_verification(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "development-ca.pem"
+    path.touch()
+    context = Mock()
+    context.cert_store_stats.return_value = {"x509_ca": 1}
+    monkeypatch.setattr(diagnostic.ssl, "SSLContext", lambda _: context)
+    connect = Mock(return_value=nullcontext(Connection()))
+    monkeypatch.setattr(diagnostic.psycopg, "connect", connect)
+    assert diagnostic.main({"DATABASE_URL": URL, diagnostic.CA_FILE_ENV: str(path)}) == 0
+    context.load_verify_locations.assert_called_once_with(cafile=str(path))
+    connect.assert_called_once()
+    options = connect.call_args.kwargs
+    assert options["sslrootcert"] == str(path)
+    assert options["sslmode"] == "verify-full"
+    assert options["host"] == "aws-0-ap-northeast-2.pooler.supabase.com"
+    output = capsys.readouterr()
+    assert all(value not in output.out + output.err for value in (URL, "secret-example", str(path)))
+
+
+@pytest.mark.parametrize(("case", "category"), [
+    ("missing", "Development CA file is missing"),
+    ("unreadable", "Development CA file could not be read"),
+    ("malformed", "Invalid Development CA file"),
+    ("relative", "Invalid Development CA configuration"),
+    ("directory", "Invalid Development CA configuration"),
+    ("empty", "Invalid Development CA configuration"),
+])
+def test_invalid_ca_fails_closed(tmp_path, monkeypatch, capsys, case, category):
+    path = tmp_path / "secret-example.pem"
+    value = str(path)
+    if case in {"unreadable", "malformed"}:
+        path.write_text("invalid certificate")
+    if case == "unreadable":
+        context = Mock()
+        context.load_verify_locations.side_effect = PermissionError(value)
+        monkeypatch.setattr(diagnostic.ssl, "SSLContext", lambda _: context)
+    if case in {"relative", "directory", "empty"}:
+        value = {"relative": "development-ca.pem", "directory": str(tmp_path), "empty": ""}[case]
+    connect = Mock()
+    monkeypatch.setattr(diagnostic.psycopg, "connect", connect)
+    assert diagnostic.main({"DATABASE_URL": URL, diagnostic.CA_FILE_ENV: value}) == 1
+    connect.assert_not_called()
+    output = capsys.readouterr()
+    assert category in output.err
+    assert all(secret not in output.out + output.err for secret in (URL, "secret-example", str(path)))
+
+
+@pytest.mark.parametrize("env_var", ["SSL_CERT_FILE", "SSL_CERT_DIR", "PGSSLROOTCERT"])
+def test_ambient_trust_override_fails_closed(env_var, monkeypatch, capsys):
+    connect = Mock()
+    monkeypatch.setattr(diagnostic.psycopg, "connect", connect)
+    assert diagnostic.main({"DATABASE_URL": URL, env_var: "secret-example"}) == 1
+    connect.assert_not_called()
+    output = capsys.readouterr()
+    assert "Diagnostic stopped" in output.err
+    assert "secret-example" not in output.out + output.err
