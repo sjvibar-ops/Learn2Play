@@ -61,7 +61,7 @@ class Connection:
             def fetchall(self):
                 if sql == diagnostic.IDENTITY:
                     return [{"read_only": "on", "isolation": "repeatable read",
-                             "database_name": "postgres"}]
+                             "database_name": "postgres", "catalog_path_verified": True}]
                 if "to_regclass" in sql:
                     return [{"present": True}]
                 if "SELECT version_num" in sql:
@@ -76,16 +76,16 @@ def test_catalog_only_and_transaction_rollback():
     connection = Connection()
     report = diagnostic.inspect(connection)
     assert connection.rolled_back
-    assert report["tables"] == {
+    assert report["catalog"]["tables"] == {
         "status": "unavailable", "reason": "PostgreSQL permission or catalog access denied.",
     }
-    assert report["alembic"]["matches_expected"]
+    assert report["baseline"]["alembic"]["matches_expected"]
     assert report["financial_runtime_exists"] is False
 
 
 def test_success_output_has_no_connection_arguments(monkeypatch, capsys):
     monkeypatch.setattr(diagnostic.psycopg, "connect", lambda **_: nullcontext(Connection()))
-    assert diagnostic.main({"DATABASE_URL": URL}) == 0
+    assert diagnostic.main({"DATABASE_URL": URL}) == 2
     captured = capsys.readouterr()
     assert URL not in captured.out + captured.err
     assert "secret-example" not in captured.out + captured.err
@@ -148,7 +148,7 @@ def test_wrong_transaction_state_stops_before_catalog_access(monkeypatch, capsys
 
     def fake_rows(_, statement, args=()):
         assert statement == diagnostic.IDENTITY
-        return [{"read_only": "off", "isolation": "repeatable read", "database_name": "postgres"}]
+        return [{"read_only": "off", "isolation": "repeatable read", "database_name": "postgres", "catalog_path_verified": True}]
 
     monkeypatch.setattr(diagnostic, "rows", fake_rows)
     monkeypatch.setattr(diagnostic.psycopg, "connect", lambda **_: nullcontext(connection))
@@ -178,7 +178,7 @@ def test_explicit_ca_passed_to_libpq_without_changing_hostname_verification(tmp_
     monkeypatch.setattr(diagnostic.ssl, "SSLContext", lambda _: context)
     connect = Mock(return_value=nullcontext(Connection()))
     monkeypatch.setattr(diagnostic.psycopg, "connect", connect)
-    assert diagnostic.main({"DATABASE_URL": URL, diagnostic.CA_FILE_ENV: str(path)}) == 0
+    assert diagnostic.main({"DATABASE_URL": URL, diagnostic.CA_FILE_ENV: str(path)}) == 2
     context.load_verify_locations.assert_called_once_with(cafile=str(path))
     connect.assert_called_once()
     options = connect.call_args.kwargs
@@ -226,3 +226,166 @@ def test_ambient_trust_override_fails_closed(env_var, monkeypatch, capsys):
     output = capsys.readouterr()
     assert "Diagnostic stopped" in output.err
     assert "secret-example" not in output.out + output.err
+
+
+@pytest.fixture
+def baseline_fixture(monkeypatch):
+    expected = diagnostic.preflight
+    principals = set(expected.PRINCIPALS)
+    all_principals = principals | {"PUBLIC"}
+    sequence_names = {f"{t}_id_seq" for t in expected.ID_TABLES}
+    catalog = {name: [] for name in diagnostic.CHECKS}
+    catalog["tables"] = [dict(table_name=t, owner="postgres", rls_enabled=False,
+                              rls_forced=False, relkind="r") for t in expected.BASE_TABLES]
+    catalog["roles"] = [dict(rolname=p, rolbypassrls=p=="postgres", rolcanlogin=p=="postgres")
+                        for p in principals]
+    catalog["sequences"] = [dict(rolname=p, relname=t, owner="postgres")
+                            for p in principals for t in sequence_names]
+    catalog["table_privileges"] = [dict(rolname=p, relname=t)
+                                   for p in principals for t in expected.BASE_TABLES]
+    catalog["public_table_privileges"] = [dict(relation=t) for t in expected.BASE_TABLES]
+    catalog["schema_privileges"] = [dict(principal=p, can_use=True, can_create=p=="postgres")
+                                    for p in all_principals]
+    catalog["authority"] = [dict(relation=t, relkind="S" if t in sequence_names else "r",
+                                 owner_authority=True, can_reference=True, can_trigger=True)
+                             for t in sequence_names | expected.BASE_TABLES]
+    catalog["columns"] = [
+        dict(table_name="appointments", name=name, position=i, type=kind, not_null=required,
+             default_expression="nextval('public.appointments_id_seq'::regclass)" if name=="id" else None,
+             identity_kind="", generated_kind="")
+        for i, (name, kind, required) in enumerate(expected.APPOINTMENT, 1)
+    ] + [dict(table_name="users", name="leaderboard_opt_in", type="boolean",
+              not_null=True, default_expression="false")] + [
+        dict(table_name=t, name="fixture_column", default_expression=None)
+        for t in expected.BASE_TABLES - {"users", "appointments"}
+    ]
+    catalog["browser_columns"] = [
+        dict(principal=p, relation=row["table_name"], relkind="r", column_name=row["name"],
+             can_read=False, can_insert=False, can_update=False)
+        for p in all_principals for row in catalog["columns"]
+    ]
+    catalog["constraints"] = [
+        dict(table_name=t, kind=kind, columns=cols, target=f"public.{target}" if target else None,
+             target_columns=refs, valid=True, deferrable=False, deferred=False, expression=None,
+             on_update="a", on_delete="a", match_type="s",
+             name="uq_appointments_meeting_room" if cols==("meeting_room",) else "constraint")
+        for t, kind, cols, target, refs in expected.CONSTRAINTS
+    ] + [
+        dict(table_name="xp_events", kind="c", target=None, target_columns=[], columns=[],
+             valid=True, deferrable=False, deferred=False, name=name, expression=expression)
+        for name, expression in {
+            "ck_xp_events_path": "(path::text = ANY (ARRAY['academic'::character varying, 'gaming'::character varying]::text[]))",
+            "ck_xp_events_positive_points": "(points > 0)",
+        }.items()
+    ]
+    catalog["indexes"] = [dict(table_name=t, columns=cols, unique=unique, name="index",
+                              valid=True, ready=True, live=True, immediate=True, method="btree",
+                              partial=False, nulls_not_distinct=False)
+                          for t, cols, unique in expected.INDEXES]
+    catalog["sessions"] = [dict(state_unavailable=0, idle_in_transaction=0, visibly_blocked=0,
+                               active=1, oldest_visible_transaction_seconds=3)]
+    revisions = [{"version_num": diagnostic.EXPECTED_REVISION}]
+    connection = Connection()
+
+    def read(conn, statement, args=()):
+        assert conn is connection
+        assert statement.lstrip().startswith("SELECT ")
+        assert conn.read_only and conn.isolation_level == psycopg.IsolationLevel.REPEATABLE_READ
+        if statement == diagnostic.IDENTITY:
+            return [dict(read_only="on", isolation="repeatable read", database_name="postgres",
+                         effective_role="postgres", session_role="postgres", catalog_path_verified=True)]
+        if "to_regclass" in statement:
+            return [{"present": True}]
+        if "SELECT version_num" in statement:
+            return revisions
+        if statement == "SELECT count(*) AS payment_count FROM public.payments":
+            return [{"payment_count": 0}]
+        section = next(name for name, (sql, _) in diagnostic.CHECKS.items() if sql == statement)
+        return catalog[section]
+
+    monkeypatch.setattr(diagnostic, "rows", read)
+    return catalog, revisions, connection
+
+
+def test_complete_baseline_is_verified(baseline_fixture):
+    _, _, connection = baseline_fixture
+    report = diagnostic.inspect(connection)
+    assert report["verdict"] == "verified"
+    assert report["baseline"]["alembic"]["row_count"] == 1
+    assert connection.rolled_back
+
+
+@pytest.mark.parametrize("versions", [["other"], ["d2b7a4e9310c", "other"], []])
+def test_revision_mismatch(baseline_fixture, versions):
+    _, revisions, connection = baseline_fixture
+    revisions[:] = [{"version_num": value} for value in versions]
+    report = diagnostic.inspect(connection)
+    assert report["baseline"]["alembic"]["status"] == "mismatch"
+    assert report["baseline"]["alembic"]["row_count"] == len(versions)
+    assert report["verdict"] == "incomplete"
+
+
+@pytest.mark.parametrize(("section", "expected", "mutate"), [
+    ("tables", "mismatch", lambda rows: rows.pop()),
+    ("tables", "mismatch", lambda rows: rows.append(dict(rows[0], table_name="payments"))),
+    ("columns", "mismatch", lambda rows: rows[0].update(type="bigint")),
+    ("constraints", "mismatch", lambda rows: rows.pop()),
+    ("indexes", "mismatch", lambda rows: rows.pop()),
+    ("triggers", "mismatch", lambda rows: rows.append(dict(table_name="users", name="unexpected",
+                                                          definition="secret-example", enabled="O"))),
+    ("authority", "unavailable", lambda rows: rows.pop()),
+    ("schema_privileges", "unavailable", lambda rows: rows.pop()),
+    ("table_privileges", "unavailable", lambda rows: rows.pop()),
+    ("sessions", "mismatch", lambda rows: rows[0].update(visibly_blocked=1)),
+    ("sessions", "unavailable", lambda rows: rows[0].update(state_unavailable=1)),
+])
+def test_baseline_drift_or_missing_evidence_blocks_verdict(baseline_fixture, section, expected, mutate):
+    catalog, _, connection = baseline_fixture
+    mutate(catalog[section])
+    report = diagnostic.inspect(connection)
+    result = report["baseline"].get(section, report["catalog"][section])
+    assert result["status"] == expected
+    assert report["verdict"] == "incomplete"
+    assert "secret-example" not in str(report)
+    if section == "tables" and "payments" in result["unexpected"]:
+        assert report["baseline"]["payments"]["transfers"]["status"] == "unavailable"
+
+
+def test_browser_table_access_detected_without_claiming_api_exposure(baseline_fixture):
+    catalog, _, connection = baseline_fixture
+    row = next(r for r in catalog["browser_columns"] if r["principal"]=="anon" and r["relation"]=="users")
+    row["can_read"] = True
+    report = diagnostic.inspect(connection)
+    assert report["catalog"]["browser_sql_risk"]["rows"] == [("anon", "users")]
+    assert report["verdict"] == "incomplete"
+
+
+def test_unexpected_payment_checks_are_aggregate_only(baseline_fixture, monkeypatch):
+    catalog, _, connection = baseline_fixture
+    for table, names in {
+        "payments": "status method transaction_reference appointment_id receipt_path submitted_at reviewed_at submission_revision reconciliation_state",
+        "payment_events": "payment_id",
+    }.items():
+        catalog["tables"].append(dict(table_name=table))
+        catalog["columns"].extend(dict(table_name=table, name=column) for column in names.split())
+    queries = []
+
+    def read(_, sql, args=()):
+        assert sql in (diagnostic.preflight.DUPLICATES, diagnostic.preflight.RECONCILIATION,
+                       diagnostic.preflight.DECISIONS, "SELECT count(*) AS payment_count FROM public.payments")
+        queries.append(sql)
+        return [{"count": 0}]
+
+    monkeypatch.setattr(diagnostic, "rows", read)
+    result = diagnostic.payment_status(connection, catalog)
+    assert result["status"] == "mismatch"
+    assert len(queries) == 4
+
+
+def test_xp_check_keeps_spaces_inside_string_literals(baseline_fixture):
+    catalog, _, connection = baseline_fixture
+    row = next(r for r in catalog["constraints"] if r["name"] == "ck_xp_events_path")
+    row["expression"] = row["expression"].replace("'academic'", "'aca demic'")
+    report = diagnostic.inspect(connection)
+    assert report["baseline"]["constraints"]["incompatible"] == ["ck_xp_events_path"]
+    assert "aca demic" not in str(report)
