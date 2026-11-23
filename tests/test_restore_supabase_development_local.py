@@ -202,8 +202,8 @@ SELECT pg_catalog.setval('public.users_id_seq', 2, true);
 
 
 @pytest.mark.parametrize("profile", [restore.LEGACY, restore.CURRENT])
-@pytest.mark.parametrize("port", [5432, 58530])
-def test_restore_checks_identity_before_writing(tmp_path, monkeypatch, port, profile):
+@pytest.mark.parametrize("outcome", ["success", "wrong_port", "startup_failed", "changed_cluster"])
+def test_restore_checks_identity_before_writing(tmp_path, monkeypatch, outcome, profile):
     target = tmp_path / profile.target
     data = target / "data"
     source = tmp_path / profile.source
@@ -215,16 +215,21 @@ def test_restore_checks_identity_before_writing(tmp_path, monkeypatch, port, pro
     monkeypatch.setattr(restore, "restore_list", Mock(return_value=b""))
     summary = ({}, {}, {})
     monkeypatch.setattr(restore, "summarize_dump", Mock(return_value=summary))
-    monkeypatch.setattr(restore, "system_identifier", Mock(return_value=b"12345"))
+    identifiers = [b"12345", b"changed" if outcome == "changed_cluster" else b"12345"]
+    monkeypatch.setattr(restore, "system_identifier", Mock(side_effect=identifiers))
 
-    def command(name, *args):
+    def command(name, *args, **kwargs):
         if name == "initdb":
             assert "-A" in args and "scram-sha-256" in args and restore.ROLE in args
             data.mkdir()
         if name == "pg_ctl" and "start" in args:
             assert "-h 127.0.0.1 -p 58530" in args[-1]
+            assert "-w" in args and kwargs == {"startup_log": target / "pg_ctl-start.log"}
             (data / "postmaster.pid").touch()
+            if outcome in {"startup_failed", "changed_cluster"}:
+                raise restore.Blocked("Scratch startup: launcher failed.")
         if name == "psql":
+            port = 5432 if outcome == "wrong_port" else 58530
             assert "-W" in args and "hostaddr=127.0.0.1 port=58530" in args[-3]
             assert "BEGIN READ ONLY" in args[-1]
             return json.dumps(["postgres", restore.ROLE, "127.0.0.1", port, "127.0.0.1",
@@ -232,7 +237,7 @@ def test_restore_checks_identity_before_writing(tmp_path, monkeypatch, port, pro
         return b""
 
     run = Mock(side_effect=command)
-    if port == 58530:
+    if outcome == "success":
         restore.restore(tmp_path, run, profile)
         assert [call.args[0] for call in run.call_args_list][-4:] == [
             "pg_ctl", "psql", "pg_restore", "pg_dump",
@@ -242,9 +247,13 @@ def test_restore_checks_identity_before_writing(tmp_path, monkeypatch, port, pro
         assert "--clean" not in restore_call
         assert restore.CONNECTION in restore_call
     else:
-        with pytest.raises(restore.Blocked, match="Server identity"):
+        message = "Server identity" if outcome == "wrong_port" else "Scratch startup"
+        with pytest.raises(restore.Blocked, match=message):
             restore.restore(tmp_path, run, profile)
-        assert run.call_args.args == ("pg_ctl", "-D", data, "-w", "-m", "fast", "stop")
+        shutdown = ("pg_ctl", "-D", data, "-w", "-m", "fast", "stop")
+        assert (run.call_args.args == shutdown) == (outcome != "changed_cluster")
+        if outcome != "wrong_port":
+            assert not any(call.args[0] == "psql" for call in run.call_args_list)
         assert not any("--dbname" in call.args for call in run.call_args_list)
     assert (source / restore.ARCHIVE).exists()
 
@@ -355,3 +364,117 @@ def test_noninteractive_tool_keeps_stderr_private(monkeypatch, capsys):
     assert capsys.readouterr().err == ""
     assert subprocess_run.call_args.kwargs["stderr"] == backup.subprocess.PIPE
     interactive.assert_not_called()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows handle inheritance")
+@pytest.mark.parametrize("capture", [True, False], ids=["pipes", "file"])
+def test_windows_startup_descendant_handles(tmp_path, capture):
+    import _winapi
+    import subprocess
+
+    ready = tmp_path / "ready"
+    release = tmp_path / "release"
+    descendant = """
+import os, sys, time
+from pathlib import Path
+ready, release = map(Path, sys.argv[1:])
+ready.write_text(str(os.getpid()))
+deadline = time.monotonic() + 8
+while not release.exists() and time.monotonic() < deadline:
+    time.sleep(0.02)
+"""
+    parent = """
+import subprocess, sys, time
+from pathlib import Path
+exe, child, ready, release = sys.argv[1:]
+print("startup stdout", flush=True)
+print("startup stderr", file=sys.stderr, flush=True)
+subprocess.Popen([exe, "-I", "-B", "-c", child, ready, release], close_fds=False)
+deadline = time.monotonic() + 3
+while not Path(ready).exists() and time.monotonic() < deadline:
+    time.sleep(0.02)
+"""
+    executable = sys._base_executable
+    command = [executable, "-I", "-B", "-c", parent, executable, descendant, str(ready), str(release)]
+    log = tmp_path / "startup.log"
+    process = None
+    handle = None
+    try:
+        if capture:
+            process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            assert process.wait(timeout=5) == 0
+        else:
+            restore.run_startup(command, None, log)
+        handle = _winapi.OpenProcess(0x00100001, False, int(ready.read_text()))
+        assert _winapi.WaitForSingleObject(handle, 0) == _winapi.WAIT_TIMEOUT
+        if capture:
+            with pytest.raises(subprocess.TimeoutExpired):
+                process.communicate(timeout=0.25)
+        else:
+            assert log.read_bytes().strip() == b"startup stderr"
+    finally:
+        release.touch()
+        try:
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=5)
+            if handle is None and ready.is_file():
+                try:
+                    handle = _winapi.OpenProcess(0x00100001, False, int(ready.read_text()))
+                except OSError as error:
+                    if error.winerror != 87:  # The fixture descendant already exited.
+                        raise
+            if handle is not None and _winapi.WaitForSingleObject(handle, 3000) == _winapi.WAIT_TIMEOUT:
+                _winapi.TerminateProcess(handle, 1)
+                assert _winapi.WaitForSingleObject(handle, 3000) == _winapi.WAIT_OBJECT_0
+        finally:
+            if handle is not None:
+                _winapi.CloseHandle(handle)
+            if process is not None:
+                for stream in (process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
+
+
+@pytest.mark.parametrize(("failure", "message"), [
+    (KeyboardInterrupt(), "canceled"),
+    (OSError("private detail"), "I/O failed"),
+    (restore.subprocess.TimeoutExpired(["private argument"], 90), "timed out"),
+])
+def test_startup_errors_are_stage_specific_and_redacted(tmp_path, monkeypatch, failure, message):
+    monkeypatch.setattr(restore.subprocess, "run", Mock(side_effect=failure))
+    with pytest.raises(restore.Blocked, match=f"Scratch startup: .*{message}") as error:
+        restore.run_startup(["private argument"], None, tmp_path / "startup.log")
+    assert "private" not in str(error.value)
+
+
+def test_interrupted_password_tool_kills_child_and_restores_console(monkeypatch, capsys):
+    from contextlib import contextmanager
+
+    backup = restore.backup
+    events = []
+
+    @contextmanager
+    def hidden_console():
+        events.append("echo disabled")
+        try:
+            yield
+        finally:
+            events.append("echo restored")
+
+    process = MagicMock()
+    process.poll.return_value = None
+    process.stderr.read1.side_effect = KeyboardInterrupt
+    process.kill.side_effect = lambda: events.append("child killed")
+    popen = MagicMock()
+    popen.return_value.__enter__.return_value = process
+    monkeypatch.setattr(backup, "hidden_windows_console", hidden_console)
+    monkeypatch.setattr(backup.subprocess, "Popen", popen)
+
+    with pytest.raises(KeyboardInterrupt):
+        backup.run_tool(Path("psql"), ["-W"], password_prompts=restore.PASSWORD_PROMPTS["psql"])
+
+    assert events == ["echo disabled", "child killed", "echo restored"]
+    assert capsys.readouterr() == ("", "")

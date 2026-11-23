@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import socket
+import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -146,6 +147,24 @@ def check_port():
         raise Blocked(f"Cannot exclusively bind local port {PORT}.") from None
 
 
+def run_startup(command, env, log_path):
+    # The Windows server launcher can inherit pg_ctl's standard handles.
+    # Wait for pg_ctl itself without waiting for descendants to close pipes.
+    try:
+        with log_path.open("xb") as diagnostic_log:
+            result = subprocess.run(
+                command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=diagnostic_log, check=False, timeout=90,
+            )
+    except KeyboardInterrupt:
+        raise Blocked("Scratch startup: canceled.") from None
+    except subprocess.TimeoutExpired:
+        raise Blocked("Scratch startup: launcher timed out.") from None
+    except OSError:
+        raise Blocked("Scratch startup: local process or log I/O failed.") from None
+    require(result.returncode == 0, "Scratch startup: launcher failed. See the restricted startup log.")
+
+
 def tool_runner():
     # Prevent libpq defaults, service settings, credentials or logging overrides
     # from leaking in from the caller. Use explicit connection parameters.
@@ -153,10 +172,14 @@ def tool_runner():
            if not key.upper().startswith("PG") and key.upper() != "DATABASE_URL"}
     env["LC_ALL"] = "C"
 
-    def run(name, *arguments):
+    def run(name, *arguments, startup_log=None):
         tool = backup.BIN / f"{name}.exe"
         require(tool.is_file(), f"Required PostgreSQL tool is missing: {name}.")
         arguments = [str(argument) for argument in arguments]
+        if startup_log is not None:
+            require(name == "pg_ctl" and "-w" in arguments and "start" in arguments and "-W" not in arguments,
+                    "Scratch startup: unexpected launcher invocation.")
+            return run_startup([str(tool), *arguments], env, startup_log)
         if "-W" in arguments:
             require(name in PASSWORD_PROMPTS, "Unrecognized PostgreSQL password prompt.")
             return backup.run_tool(tool, arguments, env, password_prompts=PASSWORD_PROMPTS[name])
@@ -290,7 +313,7 @@ def restore(local, run, profile):
     check_port()
     try:
         run("pg_ctl", "-D", data, "-l", target / "postgres.log", "-w", "start", "-o",
-            f"-h 127.0.0.1 -p {PORT} -c log_min_error_statement=panic")
+            f"-h 127.0.0.1 -p {PORT} -c log_min_error_statement=panic", startup_log=target / "pg_ctl-start.log")
         print("Enter the scratch password for identity verification, restore, and comparison.", flush=True)
         verify_identity(run, data, cluster_id)
         run("pg_restore", *options, "--use-list", toc, "--single-transaction", "--exit-on-error",
@@ -333,8 +356,14 @@ def main():
     except (Blocked, backup.catalog.Blocked) as exc:
         print(f"RESTORE STOPPED: {exc}", file=sys.stderr)
         return 1
-    except (Exception, KeyboardInterrupt):
-        print("RESTORE STOPPED: Unexpected local verification, I/O, or console failure.",
+    except KeyboardInterrupt:
+        print("RESTORE STOPPED: Local restore canceled.", file=sys.stderr)
+        return 1
+    except OSError:
+        print("RESTORE STOPPED: Local restore I/O or console failure.", file=sys.stderr)
+        return 1
+    except Exception:
+        print("RESTORE STOPPED: Unexpected local verification or console failure.",
               file=sys.stderr)
         return 1
     return 0
