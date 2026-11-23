@@ -448,6 +448,93 @@ def head_constraints(table):
     return expected
 
 
+
+# Recognize only the expression shapes in c7e4a1b92d60. Preserve token
+# boundaries, quoted identifiers, and string literal contents.
+INDEX_TOKEN = re.compile(r"""'(?:''|[^'])*'|"(?:""|[^"])*"|[A-Za-z_][A-Za-z_0-9$]*|::|[ \t\r\n\f]+|.""", re.DOTALL)
+INDEX_IDENTIFIER = re.compile(r'[A-Za-z_][A-Za-z_0-9$]*|"(?:""|[^"])*"')
+
+
+def index_tokens(expression):
+    return tuple(token.lower() if token[0].isascii() and token[0].isalpha() else token
+                 for token in INDEX_TOKEN.findall(expression or "")
+                 if token[0] not in " \t\r\n\f")
+
+
+def ungroup_index_tokens(tokens):
+    """Remove only parentheses enclosing an entire operand."""
+    while tokens[:1] == ("(",) and tokens[-1:] == (")",):
+        depth = 0
+        for end, token in enumerate(tokens):
+            depth += (token == "(") - (token == ")")
+            if depth == 0:
+                break
+        if end != len(tokens) - 1 or depth != 0:
+            break
+        tokens = tokens[1:-1]
+    return tokens
+
+
+def index_operand(tokens):
+    tokens = ungroup_index_tokens(tokens)
+    # varchar operands are commonly shown with a cast to text by pg_get_expr.
+    if tokens[-2:] == ("::", "text"):
+        tokens = ungroup_index_tokens(tokens[:-2])
+    return tokens[0] if len(tokens) == 1 else None
+
+
+def index_identifier(token):
+    if token is None or not INDEX_IDENTIFIER.fullmatch(token):
+        return None
+    return token[1:-1].replace('""', '"') if token.startswith('"') else token.lower()
+
+
+def index_function_argument(tokens, names):
+    if not tokens or tokens[0] not in names or tokens[1:2] != ("(",):
+        return None
+    arguments = ungroup_index_tokens(tokens[1:])
+    return None if arguments == tokens[1:] else arguments
+
+
+def transfer_index_column(expression):
+    lower = index_function_argument(ungroup_index_tokens(index_tokens(expression)), ("lower",))
+    trim = index_function_argument(lower, ("trim", "btrim"))
+    if trim is None:
+        return None
+    if lower[0] == "trim" and trim[:2] == ("both", "from"):
+        trim = trim[2:]
+    return index_identifier(index_operand(trim))
+
+
+def transfer_index_predicate(expression):
+    tokens = ungroup_index_tokens(index_tokens(expression))
+    if tokens.count("=") != 1:
+        return None
+    split = tokens.index("=")
+    column = index_identifier(index_operand(tokens[:split]))
+    value = index_operand(tokens[split + 1:])
+    if column is None or value is None or not value.startswith("'"):
+        return None
+    return column, value
+
+
+def transfer_index_status(row, unique):
+    if row["unique"] != unique or row["partial"] != unique or len(row["columns"]) != 2:
+        return "MISMATCH"
+    columns = tuple(transfer_index_column(expression) for expression in row["columns"])
+    if any(actual is not None and actual != expected
+           for actual, expected in zip(columns, ("method", "transaction_reference"))):
+        return "MISMATCH"
+    predicate = transfer_index_predicate(row.get("predicate"))
+    if not unique and row.get("predicate") is not None:
+        return "MISMATCH"
+    if unique and predicate is not None and predicate != ("status", "'VERIFIED'"):
+        return "MISMATCH"
+    if None in columns or (unique and predicate is None):
+        return "INCOMPLETE"
+    return "PASS"
+
+
 def structure_results(table, constraints, indexes):
     expected = head_constraints(table)
     observed = {}
@@ -506,18 +593,13 @@ def structure_results(table, constraints, indexes):
     if table == "payments":
         for name, unique in TRANSFER_INDEXES.items():
             candidates = [r for r in indexes if r["name"] == name]
-            valid = len(candidates) == 1 and any(
-                r["unique"] == unique and valid_index(r) and r["partial"] == unique
-                and len(r["columns"]) == 2 and all(
-                    expression.lower().lstrip().startswith("lower(") and normalized_expression(expression).lower() in {
-                        f"lowertrimbothfrom{column}", f"lowertrim{column}", f"lowerbtrim{column}"
-                    } for expression, column in zip(r["columns"], ("method", "transaction_reference"))
-                )
-                and normalized_expression(r.get("predicate")) == ("status='VERIFIED'" if unique else "")
-                for r in candidates
-            )
-            results.append(diagnostic_item(name, "PASS" if valid else "MISMATCH" if candidates else "MISSING",
-                                           "c7e4a1b92d60"))
+            if not candidates:
+                state = "MISSING"
+            elif len(candidates) != 1 or not valid_index(candidates[0]):
+                state = "MISMATCH"
+            else:
+                state = transfer_index_status(candidates[0], unique)
+            results.append(diagnostic_item(name, state, "c7e4a1b92d60"))
     return results
 
 

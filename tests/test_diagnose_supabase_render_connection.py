@@ -486,3 +486,49 @@ def test_unknown_hosted_revision_has_no_claimed_upgrade_path(baseline_fixture):
     assert graph["pending_from_observed"] is None
     assert graph["pending_from_historical_reference"][0] == "c1a82b7d43ef"
     assert graph["pending_from_historical_reference"][-1] == diagnostic.EXPECTED_HEAD
+
+
+
+
+@pytest.mark.parametrize(("expression", "state"), [
+    ("lower(trim(bothfrommethod))", "MISMATCH"),
+    ("lower(btrim(transaction_reference::text))", "MISMATCH"),
+    ('lower(trim("Method"))', "MISMATCH"),
+    ("lower(trim(both from method_extra))", "MISMATCH"),
+    ("lower(trim(both from meth od))", "INCOMPLETE"),
+    ("lower(trim(both from meth.od))", "INCOMPLETE"),
+    ("lower(trim(leading from method))", "INCOMPLETE"),
+    ("lower(trim(method::varchar(1)))", "INCOMPLETE"),
+    ("lower(custom_trim(method))", "INCOMPLETE"),
+    (" (( LoWeR ( TRIM ( BOTH \n FROM ((method)::text) ) ) )) ", "PASS"),
+    ('lower(btrim("method"::TEXT))', "PASS"),
+])
+def test_payment_index_keys_preserve_sql_tokens(dashboard_head, expression, state):
+    expected, data = dashboard_head
+    index = next(row for row in data["indexes"] if row.get("name") == "uq_payments_verified_transfer")
+    index["columns"] = (expression, index["columns"][1])
+    payment = diagnostic.preflight.dashboard_schema(data, expected)["payments"]
+    finding = next(row for row in payment["findings"] if row["object"] == index["name"])
+    assert finding["status"] == state
+    assert payment["status"] == state
+
+
+@pytest.mark.parametrize(("predicate", "state"), [
+    (" ( (STATUS)::TEXT = ('VERIFIED'::text) ) ", "PASS"),
+    ("status = 'verified'", "MISMATCH"),
+    ("status = 'VERI FIED'", "MISMATCH"),
+    ("review_status = 'VERIFIED'", "MISMATCH"),
+    ('"Status" = \'VERIFIED\'', "MISMATCH"),
+    ("status = 'VERIFIED' OR TRUE", "INCOMPLETE"),
+    ("status = 'VERIFIED'::varchar(1)", "INCOMPLETE"),
+    ("status /* comment */ = 'VERIFIED'", "INCOMPLETE"),
+    (None, "INCOMPLETE"),
+])
+def test_payment_index_predicate_preserves_sql_tokens(dashboard_head, predicate, state):
+    expected, data = dashboard_head
+    index = next(row for row in data["indexes"] if row.get("name") == "uq_payments_verified_transfer")
+    index["predicate"] = predicate
+    payment = diagnostic.preflight.dashboard_schema(data, expected)["payments"]
+    finding = next(row for row in payment["findings"] if row["object"] == index["name"])
+    assert finding["status"] == state
+    assert payment["status"] == state
