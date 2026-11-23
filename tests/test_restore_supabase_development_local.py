@@ -201,6 +201,54 @@ SELECT pg_catalog.setval('public.users_id_seq', 2, true);
         restore.summarize_dump(sql.replace(profile.revision, b"83ca40c9f279"), profile)
 
 
+XP_ARCHIVE_CHECK = (
+    b"    CONSTRAINT ck_xp_events_path CHECK (((path)::text = ANY "
+    b"((ARRAY['academic'::character varying, 'gaming'::character varying])::text[]))),"
+)
+XP_RESTORED_CHECK = (
+    b"    CONSTRAINT ck_xp_events_path CHECK (((path)::text = ANY "
+    b"(ARRAY[('academic'::character varying)::text, ('gaming'::character varying)::text]))),"
+)
+
+
+@pytest.fixture
+def xp_schema_pair():
+    key = (b"TABLE", b"xp_events")
+    table = b"CREATE TABLE public.xp_events (\n    path character varying(20) NOT NULL,\n%s\n    id integer\n);"
+    return key, ({key: table % XP_ARCHIVE_CHECK}, {}, {}), ({key: table % XP_RESTORED_CHECK}, {}, {})
+
+
+def test_xp_constraint_accepts_verified_postgresql_cast_rewrite(xp_schema_pair):
+    key, archive, restored = xp_schema_pair
+    assert archive[0] != restored[0]
+    restore.verify_restore(archive, restored)
+    assert XP_RESTORED_CHECK in restored[0][key]
+
+
+@pytest.mark.parametrize(("old", "new"), [
+    (b"'gaming'", b"'other'"),
+    (b"= ANY", b"<> ANY"),
+    (b"(path)::text", b"(other_path)::text"),
+    (b"ck_xp_events_path", b"ck_other_path"),
+    (b"character varying(20)", b"character varying(30)"),
+    (b"id integer", b"id bigint"),
+])
+def test_xp_constraint_rejects_other_schema_changes(xp_schema_pair, old, new):
+    key, archive, restored = xp_schema_pair
+    restored[0][key] = restored[0][key].replace(old, new)
+    with pytest.raises(restore.Blocked, match="schema definitions"):
+        restore.verify_restore(archive, restored)
+
+
+def test_xp_constraint_cast_exception_does_not_apply_to_another_table(xp_schema_pair):
+    key, archive, restored = xp_schema_pair
+    other = (b"TABLE", b"other_events")
+    for schema, _, _ in (archive, restored):
+        schema[other] = schema.pop(key).replace(b"public.xp_events", b"public.other_events")
+    with pytest.raises(restore.Blocked, match="schema definitions"):
+        restore.verify_restore(archive, restored)
+
+
 @pytest.mark.parametrize("profile", [restore.LEGACY, restore.CURRENT])
 @pytest.mark.parametrize("outcome", ["success", "wrong_port", "startup_failed", "changed_cluster"])
 def test_restore_checks_identity_before_writing(tmp_path, monkeypatch, outcome, profile):

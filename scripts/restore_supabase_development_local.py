@@ -255,6 +255,23 @@ def summarize_dump(sql, profile):
 
 
 def verify_restore(expected, actual):
+    expected_schema, _, _ = expected
+    actual_schema, rows, sequences = actual
+    key = (b"TABLE", b"xp_events")
+    # PostgreSQL 18 deparses this specific array cast as casts on its elements.
+    archive_check = (
+        b"    CONSTRAINT ck_xp_events_path CHECK (((path)::text = ANY "
+        b"((ARRAY['academic'::character varying, 'gaming'::character varying])::text[]))),"
+    )
+    restored_check = (
+        b"    CONSTRAINT ck_xp_events_path CHECK (((path)::text = ANY "
+        b"(ARRAY[('academic'::character varying)::text, ('gaming'::character varying)::text]))),"
+    )
+    archived_lines = expected_schema.get(key, b"").split(b"\n")
+    restored_lines = actual_schema.get(key, b"").split(b"\n")
+    if archived_lines.count(archive_check) == 1 and restored_lines.count(restored_check) == 1:
+        restored_lines[restored_lines.index(restored_check)] = archive_check
+        actual = ({**actual_schema, key: b"\n".join(restored_lines)}, rows, sequences)
     for old, new, label in zip(expected, actual, ("schema definitions", "table rows", "sequence states")):
         require(old == new, f"Restored {label} differ from the archive.")
 
