@@ -202,7 +202,7 @@ WHERE schemaname='public' ORDER BY tablename,policyname
     "sessions": """
 SELECT pg_has_role(current_user,'pg_read_all_stats','USAGE') AS full_stats_privilege,
        count(*) AS other_sessions,count(*) FILTER (WHERE state='active') AS active,
-       count(*) FILTER (WHERE state LIKE 'idle in transaction%') AS idle_in_transaction,
+       count(*) FILTER (WHERE state IN ('idle in transaction', 'idle in transaction (aborted)')) AS idle_in_transaction,
        count(*) FILTER (WHERE state IS NULL) AS state_unavailable,
        max(extract(epoch FROM statement_timestamp()-xact_start))::bigint AS oldest_visible_transaction_seconds,
        count(*) FILTER (WHERE cardinality(pg_blocking_pids(pid))>0) AS visibly_blocked

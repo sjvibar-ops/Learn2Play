@@ -532,3 +532,17 @@ def test_payment_index_predicate_preserves_sql_tokens(dashboard_head, predicate,
     finding = next(row for row in payment["findings"] if row["object"] == index["name"])
     assert finding["status"] == state
     assert payment["status"] == state
+
+
+def test_session_query_passes_psycopg_parameter_conversion():
+    from psycopg._queries import PostgresQuery
+
+    # Use the driver's extended-query converter with an offline context stub.
+    sql, params = diagnostic.CHECKS["sessions"]
+    assert params == ()
+    query = PostgresQuery(Mock(encoding="utf-8"))
+    query.convert(sql, params)
+
+    assert query.query == sql.encode("utf-8")
+    assert b"state IN ('idle in transaction', 'idle in transaction (aborted)')" in query.query
+    assert b"LIKE 'idle in transaction%'" not in query.query
