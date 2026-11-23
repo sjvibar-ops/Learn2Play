@@ -270,3 +270,88 @@ def test_tool_runner_discards_ambient_remote_connection_settings(monkeypatch):
     _, args, env = run_tool.call_args.args
     assert not any(key.upper().startswith("PG") or key.upper() == "DATABASE_URL" for key in env)
     assert args[1].startswith("host=127.0.0.1 hostaddr=127.0.0.1 port=58530 ")
+
+
+@pytest.mark.parametrize(("tool", "prompts"), [
+    ("initdb", (b"Enter new superuser password: ", b"Enter it again: ")),
+    ("psql", (b"Password: ",)),
+    ("pg_restore", (b"Password: ",)),
+    ("pg_dump", (b"Password: ",)),
+])
+def test_tool_runner_enables_prompt_relay_only_for_password_calls(monkeypatch, tool, prompts):
+    monkeypatch.setattr(Path, "is_file", lambda _: True)
+    run_tool = Mock(return_value=b"")
+    monkeypatch.setattr(restore.backup, "run_tool", run_tool)
+    run = restore.tool_runner()
+    run(tool, "--version")
+    assert run_tool.call_args.kwargs == {}
+    run(tool, "-W")
+    assert run_tool.call_args.kwargs == {"password_prompts": prompts}
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_password_tool_relays_partial_prompts_and_sanitizes_errors(monkeypatch, capsys, returncode):
+    from contextlib import contextmanager
+
+    backup = restore.backup
+    events = []
+
+    @contextmanager
+    def hidden_console():
+        events.append("echo disabled")
+        try:
+            yield
+        finally:
+            events.append("echo restored")
+
+    def stderr_chunks():
+        assert events == ["echo disabled"]
+        yield b"Enter new super"
+        assert capsys.readouterr().err == ""
+        yield b"user password: "
+        assert capsys.readouterr().err == "Enter new superuser password: "
+        yield b"\r\nEnter it "
+        assert capsys.readouterr().err == "\n"
+        yield b"again: "
+        assert capsys.readouterr().err == "Enter it again: "
+        yield b"\r\npermission denied: private fixture detail\n"
+        yield b""
+
+    process = MagicMock()
+    process.stdout.read.return_value = b"result"
+    process.stderr.read1.side_effect = stderr_chunks()
+    process.wait.return_value = returncode
+    popen = MagicMock()
+    popen.return_value.__enter__.return_value = process
+    monkeypatch.setattr(backup, "hidden_windows_console", hidden_console)
+    monkeypatch.setattr(backup.subprocess, "Popen", popen)
+
+    def run():
+        return backup.run_tool(Path("initdb"), ["-W"], password_prompts=restore.PASSWORD_PROMPTS["initdb"])
+
+    if returncode:
+        with pytest.raises(backup.catalog.Blocked, match="The tool reported a permission error") as failure:
+            run()
+        assert "private fixture detail" not in str(failure.value)
+    else:
+        assert run() == b"result"
+    assert events == ["echo disabled", "echo restored"]
+    assert capsys.readouterr().err == "\n"
+    assert "stdin" not in popen.call_args.kwargs
+    assert popen.call_args.kwargs["stderr"] == backup.subprocess.PIPE
+
+
+def test_noninteractive_tool_keeps_stderr_private(monkeypatch, capsys):
+    backup = restore.backup
+    subprocess_run = Mock(return_value=backup.subprocess.CompletedProcess(
+        ["pg_restore", "--list"], 1, b"", b"permission denied: private fixture detail"
+    ))
+    interactive = Mock()
+    monkeypatch.setattr(backup.subprocess, "run", subprocess_run)
+    monkeypatch.setattr(backup, "run_password_tool", interactive)
+    with pytest.raises(backup.catalog.Blocked, match="The tool reported a permission error") as failure:
+        backup.run_tool(Path("pg_restore"), ["--list"])
+    assert "private fixture detail" not in str(failure.value)
+    assert capsys.readouterr().err == ""
+    assert subprocess_run.call_args.kwargs["stderr"] == backup.subprocess.PIPE
+    interactive.assert_not_called()

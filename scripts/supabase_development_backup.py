@@ -1,5 +1,6 @@
 """Create a restricted logical archive of the reviewed Development baseline."""
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
@@ -210,11 +211,58 @@ def read_development_url():
     return raw
 
 
-def run_tool(tool, arguments, env=None, *, discard_stdout=False):
-    result = subprocess.run(
-        [str(tool), *arguments], env=env, stdout=subprocess.DEVNULL if discard_stdout else subprocess.PIPE,
-        stderr=subprocess.PIPE, check=False,
-    )
+def relay_password_prompts(stream, prompts):
+    """Display only known prompt text before the child waits for input."""
+    diagnostics = bytearray()
+    prefix = bytearray()
+    could_be_prompt = True
+    visible = False
+    for chunk in iter(lambda: stream.read1(4096), b""):
+        diagnostics.extend(chunk)
+        for byte in chunk:
+            if byte == 10:
+                if visible:
+                    print(file=sys.stderr, flush=True)
+                prefix.clear()
+                could_be_prompt = True
+                visible = False
+            elif could_be_prompt:
+                prefix.append(byte)
+                if prefix in prompts:
+                    print(prefix.decode("ascii"), end="", file=sys.stderr, flush=True)
+                    visible = True
+                    could_be_prompt = False
+                elif not any(prompt.startswith(prefix) for prompt in prompts):
+                    could_be_prompt = False
+    return bytes(diagnostics)
+
+
+def run_password_tool(command, env, stdout, prompts):
+    # Windows PostgreSQL normally uses CONOUT$ directly. Relay the known
+    # prompts if it falls back to stderr, and keep all other diagnostics private.
+    with hidden_windows_console():
+        with subprocess.Popen(command, env=env, stdout=stdout, stderr=subprocess.PIPE) as process:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                try:
+                    output = executor.submit(process.stdout.read) if process.stdout is not None else None
+                    diagnostics = relay_password_prompts(process.stderr, prompts)
+                    returncode = process.wait()
+                    return subprocess.CompletedProcess(
+                        command, returncode, output.result() if output is not None else None, diagnostics
+                    )
+                except BaseException:
+                    if process.poll() is None:
+                        process.kill()
+                    raise
+
+
+def run_tool(tool, arguments, env=None, *, discard_stdout=False, password_prompts=()):
+    command = [str(tool), *arguments]
+    stdout = subprocess.DEVNULL if discard_stdout else subprocess.PIPE
+    if password_prompts:
+        result = run_password_tool(command, env, stdout, password_prompts)
+    else:
+        result = subprocess.run(command, env=env, stdout=stdout, stderr=subprocess.PIPE, check=False)
     diagnostics = result.stderr.lower()
     reports_error = re.search(
         rb"(?m)^\s*(?:pg_dump(?:all)?(?:\.exe)?|pg_restore(?:\.exe)?):"

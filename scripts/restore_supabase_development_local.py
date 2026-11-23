@@ -51,6 +51,12 @@ CURRENT = BackupProfile(
 )
 PROFILES = {profile.revision.decode(): profile for profile in (LEGACY, CURRENT)}
 TOOLS = ("initdb", "pg_ctl", "pg_controldata", "postgres", "pg_restore", "pg_dump", "psql")
+PASSWORD_PROMPTS = {
+    "initdb": (b"Enter new superuser password: ", b"Enter it again: "),
+    "psql": (b"Password: ",),
+    "pg_restore": (b"Password: ",),
+    "pg_dump": (b"Password: ",),
+}
 CONNECTION = (
     f"host=127.0.0.1 hostaddr=127.0.0.1 port={PORT} dbname=postgres user={ROLE} "
     "sslmode=disable gssencmode=disable require_auth=scram-sha-256 connect_timeout=5"
@@ -150,7 +156,11 @@ def tool_runner():
     def run(name, *arguments):
         tool = backup.BIN / f"{name}.exe"
         require(tool.is_file(), f"Required PostgreSQL tool is missing: {name}.")
-        return backup.run_tool(tool, [str(argument) for argument in arguments], env)
+        arguments = [str(argument) for argument in arguments]
+        if "-W" in arguments:
+            require(name in PASSWORD_PROMPTS, "Unrecognized PostgreSQL password prompt.")
+            return backup.run_tool(tool, arguments, env, password_prompts=PASSWORD_PROMPTS[name])
+        return backup.run_tool(tool, arguments, env)
 
     return run
 
