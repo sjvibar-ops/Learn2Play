@@ -1,4 +1,6 @@
 """Restore the pinned Development archive to a new Windows loopback-only cluster."""
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 import hashlib
 import json
 import os
@@ -11,13 +13,43 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import supabase_development_backup as backup
 
-SOURCE = "Learn2Play-Development-dev-before-migrations-2026-11-22-retry-2"
-TARGET = "Learn2Play-Development-Restore-58530"
 ARCHIVE = "development.dump"
-SHA256 = "4f03b070a4bf45c71b4ed5ee6849d22452b10c1c14140131bc0d773ed549b866"
 PORT = 58530
 ROLE = "l2p_dev_restore"
-REVISION = b"9e45f7e7aa32"
+
+
+@dataclass(frozen=True)
+class BackupProfile:
+    revision: bytes
+    source: str
+    target: str
+    size: int
+    sha256: str
+    tables: frozenset[str]
+    sequences: frozenset[str]
+    legacy_manifest_size: int | None = None
+
+
+LEGACY = BackupProfile(
+    revision=b"9e45f7e7aa32",
+    source="Learn2Play-Development-dev-before-migrations-2026-11-22-retry-2",
+    target="Learn2Play-Development-Restore-58530",
+    size=46382,
+    sha256="4f03b070a4bf45c71b4ed5ee6849d22452b10c1c14140131bc0d773ed549b866",
+    tables=frozenset(backup.TABLES),
+    sequences=frozenset(backup.BASELINE_SEQUENCES),
+    legacy_manifest_size=870,
+)
+CURRENT = BackupProfile(
+    revision=b"d2b7a4e9310c",
+    source="Learn2Play-Development-pre-migration-2026-11-23",
+    target="Learn2Play-Development-Restore-58530-d2b7a4e9310c",
+    size=51811,
+    sha256="693fed196119c0b8d1723f29a652c91f2631e6e0335ebb190bdcc0505dce6a79",
+    tables=LEGACY.tables | {"xp_events"},
+    sequences=LEGACY.sequences | {"xp_events_id_seq"},
+)
+PROFILES = {profile.revision.decode(): profile for profile in (LEGACY, CURRENT)}
 TOOLS = ("initdb", "pg_ctl", "pg_controldata", "postgres", "pg_restore", "pg_dump", "psql")
 CONNECTION = (
     f"host=127.0.0.1 hostaddr=127.0.0.1 port={PORT} dbname=postgres user={ROLE} "
@@ -37,43 +69,66 @@ def require(condition, message):
         raise Blocked(message)
 
 
-def check_paths(local, source, target):
+def check_paths(local, source, target, profile):
     require(local.is_absolute() and local.is_dir() and local.resolve(strict=True) == local,
             "LOCALAPPDATA must be an existing canonical directory.")
-    require(source == local / SOURCE and source.is_dir() and source.resolve(strict=True) == source,
+    require(source == local / profile.source and source.is_dir() and source.resolve(strict=True) == source,
             "Backup directory is missing or redirected.")
     for name in (ARCHIVE, "manifest.json"):
         path = source / name
         require(path.is_file() and path.resolve(strict=True) == path and not path.is_symlink(),
                 "A required backup file is missing or redirected.")
-    require(target == local / TARGET and not os.path.lexists(target),
+    require(target == local / profile.target and not os.path.lexists(target),
             "Restore directory or data directory already exists, or the target is invalid.")
 
 
-def check_archive(path):
-    require(path.stat().st_size == 46382 and backup.archive_checksum(path) == SHA256,
-            "Archive size or pinned SHA-256 does not match.")
+def check_archive(path, profile):
+    require(path.name == ARCHIVE and path.stat().st_size == profile.size
+            and backup.archive_checksum(path) == profile.sha256,
+            "Archive filename, size, or pinned SHA-256 does not match.")
 
 
-def check_manifest(source):
+def unique_manifest_fields(pairs):
+    result = dict(pairs)
+    require(len(result) == len(pairs), "Manifest contains duplicate fields.")
+    return result
+
+
+def check_manifest(source, profile):
     path = source / "manifest.json"
-    require(path.stat().st_size == 870, "Unexpected manifest size.")
-    manifest = json.loads(path.read_bytes())
+    size = path.stat().st_size
+    require(size == profile.legacy_manifest_size if profile.legacy_manifest_size is not None
+            else 0 < size <= 4096, "Unexpected manifest size.")
+    try:
+        manifest = json.loads(path.read_bytes(), object_pairs_hook=unique_manifest_fields)
+    except (ValueError, UnicodeError):
+        raise Blocked("Manifest is malformed.") from None
     expected = {
         "project_reference": "pxiwoowpoewxvnsjwfdw",
         "postgresql_version": "17.11", "backup_tool_version": "18.4",
-        "alembic_revision": REVISION.decode(), "archive": ARCHIVE,
-        "archive_size_bytes": 46382, "sha256": SHA256,
+        "alembic_revision": profile.revision.decode(), "archive": ARCHIVE,
+        "archive_size_bytes": profile.size, "sha256": profile.sha256,
         "status": "ARCHIVE CREATED AND VERIFIED",
     }
     require(isinstance(manifest, dict)
             and all(manifest.get(key) == value for key, value in expected.items())
+            and type(manifest["archive_size_bytes"]) is int
             and manifest.get("restore_verified") is False
             and isinstance(manifest.get("backup_scope"), dict)
-            and manifest["backup_scope"].get("included") ==
-            "public schema and all approved baseline table data, including public.alembic_version",
+            and manifest["backup_scope"].get("included") == backup.SCOPE["included"],
             "Manifest does not describe the pinned Development backup.")
-    check_archive(source / ARCHIVE)
+    if profile.legacy_manifest_size is None:
+        require(set(manifest) == expected.keys() | {"timestamp_utc", "inventory", "backup_scope", "restore_verified"}
+                and manifest["backup_scope"] == backup.SCOPE
+                and manifest["inventory"] == {
+                    "tables": sorted(profile.tables), "sequences": sorted(profile.sequences),
+                }, "Manifest scope or inventory does not match the selected Development backup.")
+        try:
+            timestamp = datetime.fromisoformat(manifest["timestamp_utc"])
+        except (TypeError, ValueError):
+            raise Blocked("Manifest timestamp is invalid.") from None
+        require(timestamp.utcoffset() == timedelta(0), "Manifest timestamp must use UTC.")
+    check_archive(source / ARCHIVE, profile)
 
 
 def check_port():
@@ -89,7 +144,7 @@ def tool_runner():
     # Prevent libpq defaults, service settings, credentials or logging overrides
     # from leaking in from the caller. Use explicit connection parameters.
     env = {key: value for key, value in os.environ.items()
-           if not key.upper().startswith("PG")}
+           if not key.upper().startswith("PG") and key.upper() != "DATABASE_URL"}
     env["LC_ALL"] = "C"
 
     def run(name, *arguments):
@@ -122,7 +177,7 @@ def restore_list(listing):
     return b"\n".join(rows) + b"\n"
 
 
-def summarize_dump(sql):
+def summarize_dump(sql, profile):
     """Return exact schema sections, unordered row fingerprints and sequence states."""
     sql = sql.replace(b"\r\n", b"\n")
     headers = list(HEADER.finditer(sql))
@@ -146,7 +201,7 @@ def summarize_dump(sql):
             finish = section.index(b"\\.", start)
             rows = section[start:finish]
             if name == b"alembic_version":
-                require(copy[2] == b"version_num" and rows == [REVISION],
+                require(copy[2] == b"version_num" and rows == [profile.revision],
                         "Alembic revision is not the reviewed baseline.")
             data[name] = (copy[2], len(rows), sorted(hashlib.sha256(row).digest() for row in rows))
         elif kind == b"SEQUENCE SET":
@@ -158,8 +213,8 @@ def summarize_dump(sql):
             key = (kind, name)
             require(key not in schema, "Duplicate schema definition.")
             schema[key] = b"\n".join(lines)
-    require(set(data) == {name.encode() for name in backup.TABLES}
-            and set(sequences) == {name.encode() for name in backup.BASELINE_SEQUENCES}
+    require(set(data) == {name.encode() for name in profile.tables}
+            and set(sequences) == {name.encode() for name in profile.sequences}
             and {name for kind, name in schema if kind == b"TABLE"} == set(data)
             and {name for kind, name in schema if kind == b"SEQUENCE"} == set(sequences),
             "Dump table or sequence inventory differs from the reviewed baseline.")
@@ -196,11 +251,11 @@ ROLLBACK;
             "Server identity does not match the new loopback scratch cluster.")
 
 
-def restore(local, run):
-    source, target = local / SOURCE, local / TARGET
+def restore(local, run, profile):
+    source, target = local / profile.source, local / profile.target
     data = target / "data"
-    check_paths(local, source, target)
-    check_manifest(source)
+    check_paths(local, source, target, profile)
+    check_manifest(source, profile)
     check_versions(run)
     check_port()
 
@@ -208,12 +263,12 @@ def restore(local, run):
     archive = target / ARCHIVE
     with (source / ARCHIVE).open("rb") as original, archive.open("xb") as copied:
         shutil.copyfileobj(original, copied)
-    check_archive(archive)
+    check_archive(archive, profile)
     toc = target / "restore.list"
     with toc.open("xb") as handle:
         handle.write(restore_list(run("pg_restore", "--list", archive)))
     options = ("--no-owner", "--no-acl")
-    expected = summarize_dump(run("pg_restore", *options, "--file=-", archive))
+    expected = summarize_dump(run("pg_restore", *options, "--file=-", archive), profile)
     tool_path = str(backup.BIN / "pg_ctl.exe").replace("'", "''")
     data_path = str(data).replace("'", "''")
     shutdown = f"& '{tool_path}' -D '{data_path}' -w -m fast stop"
@@ -231,7 +286,7 @@ def restore(local, run):
         run("pg_restore", *options, "--use-list", toc, "--single-transaction", "--exit-on-error",
             "-W", "--dbname", CONNECTION, archive)
         actual = summarize_dump(run("pg_dump", *options, "--schema=public", "--format=plain",
-                                    "-W", "--dbname", CONNECTION))
+                                    "-W", "--dbname", CONNECTION), profile)
         verify_restore(expected, actual)
     except BaseException:
         # pg_ctl consults the new cluster's PID file, never a Windows service.
@@ -245,19 +300,26 @@ def restore(local, run):
         raise
 
     print(f"PASS: {len(actual[0])} schema definitions, {len(actual[1])} tables, "
-          f"{len(actual[2])} sequences, and Alembic revision {REVISION.decode()}.")
+          f"{len(actual[2])} sequences, and Alembic revision {profile.revision.decode()}.")
     for name, (_, count, _) in sorted(actual[1].items()):
         print(f"  {name.decode()}: {count} rows")
     print(f"Scratch server: 127.0.0.1:{PORT}, database postgres, login {ROLE}")
     print(f"Stop the scratch server with:\n{shutdown}")
 
 
+def selected_profile(arguments):
+    if len(arguments) != 2 or arguments[0] != "--profile" or arguments[1] not in PROFILES:
+        raise Blocked("Select exactly one pinned backup using --profile 9e45f7e7aa32 or --profile d2b7a4e9310c.")
+    return PROFILES[arguments[1]]
+
+
 def main():
     try:
-        require(os.name == "nt" and len(sys.argv) == 1 and os.environ.get("LOCALAPPDATA"),
-                "Run this helper with no arguments from an interactive Windows PowerShell console.")
+        profile = selected_profile(sys.argv[1:])
+        require(os.name == "nt" and os.environ.get("LOCALAPPDATA"),
+                "Run this helper from an interactive Windows PowerShell console.")
         with backup.hidden_windows_console():
-            restore(Path(os.environ["LOCALAPPDATA"]), tool_runner())
+            restore(Path(os.environ["LOCALAPPDATA"]), tool_runner(), profile)
     except (Blocked, backup.catalog.Blocked) as exc:
         print(f"RESTORE STOPPED: {exc}", file=sys.stderr)
         return 1
@@ -270,4 +332,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
