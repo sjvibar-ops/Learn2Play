@@ -1,6 +1,8 @@
 """Catalog queries and reviewed expectations for Development at d2b7a4e9310c."""
 
+import ast
 import hashlib
+from pathlib import Path
 import re
 
 BASE_TABLES = {
@@ -118,6 +120,7 @@ WHERE n.nspname='public' AND c.relkind IN ('r','p') ORDER BY c.relname,k.conname
 SELECT c.relname AS table_name,x.relname AS name,i.indisunique AS unique,i.indisvalid AS valid,
        i.indisready AS ready,i.indislive AS live,i.indimmediate AS immediate,
        am.amname AS method,i.indpred IS NOT NULL AS partial,
+       pg_get_expr(i.indpred,i.indrelid) AS predicate,i.indnkeyatts AS key_count,
        coalesce((to_jsonb(i)->>'indnullsnotdistinct')::boolean,false) AS nulls_not_distinct,
        ARRAY(SELECT pg_get_indexdef(i.indexrelid,k,true) FROM generate_series(1,i.indnatts::int) k) AS columns
 FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indrelid
@@ -323,3 +326,281 @@ def digest_definitions(data, keys):
          if key in keys else value for key, value in row.items()}
         for row in data
     ]
+
+
+
+
+# These mappings are application-head expectations. Keep the starting-revision
+# comparator separate so a healthy migration starting point is still identifiable.
+ORIGINS = {
+    "appointments": {
+        **dict.fromkeys(("provider_confirmed_at", "student_confirmed_at", "attendance_disputed_at",
+                         "attendance_disputed_by_id"), "f31a6e8c9b24"),
+        **dict.fromkeys(("attendance_closed_at", "attendance_resolution", "attendance_resolution_reason",
+                         "attendance_resolved_at", "attendance_resolved_by_id"), "a8f2b6c01d73"),
+        **dict.fromkeys(("ended_at", "ended_by_id", "ending_reason"), "f4c2a8d91e70"),
+        "payment_required": "c1a82b7d43ef",
+    },
+    "users": {"leaderboard_opt_in": "d2b7a4e9310c"},
+    "role_applications": {"submitted_at": "a6d2f9c83b10"},
+    "payments": {
+        **dict.fromkeys(("reconciliation_state", "reconciliation_version", "reconciliation_explanation",
+                         "reconciliation_updated_at", "reconciliation_updated_by_id"), "f4c2a8d91e70"),
+        "submission_revision": "e9b7c2d41a60", "ledger_verification_xid": "c83d9f2a71e4",
+    },
+}
+TABLE_ORIGINS = {"payments": "c1a82b7d43ef", "xp_events": "c4b8a29f71d2"}
+STRUCTURAL_TABLES = {"users", "appointments", "role_applications", "payments"}
+PAYMENT_CHECKS = {
+    "ck_payment_amount": "amount>=0",
+    "ck_payment_status": "status=ANYARRAY['PENDING','SUBMITTED','VERIFIED','REJECTED']",
+    "ck_payment_submission_revision": "submission_revision>=0",
+    "ck_payment_reconciliation_state": (
+        "reconciliation_state=ANYARRAY['NOT_REQUIRED','NEEDS_REVIEW','NO_FUNDS_RECEIVED',"
+        "'REFUND_PENDING','REFUNDED','RETAINED']"
+    ),
+    "ck_payment_reconciliation_version": "reconciliation_version>=0",
+}
+TRANSFER_INDEXES = {"ix_payments_transfer_claim": False, "uq_payments_verified_transfer": True}
+
+
+def model_columns(models):
+    """Use the current mapper metadata without creating a Flask app or engine."""
+    from sqlalchemy.dialects import postgresql
+    from sqlalchemy.schema import DefaultClause
+    from sqlalchemy.sql.sqltypes import String
+
+    dialect = postgresql.dialect()
+    expected = {}
+    for model in models:
+        table = model.__table__
+        columns = {}
+        for column in table.columns:
+            default = column.server_default
+            if isinstance(default, DefaultClause):
+                argument = default.arg
+                default = (repr(argument) if isinstance(argument, str) and isinstance(column.type, String)
+                           else str(argument) if isinstance(argument, str) else str(argument.compile(dialect=dialect)))
+            else:
+                # FetchedValue is a marker for a trigger-managed value, not a DDL default.
+                default = f"nextval('{table.name}_id_seq'::regclass)" if column is table._autoincrement_column else None
+            columns[column.name] = (column.type.compile(dialect=dialect).lower().replace("varchar", "character varying"),
+                                    not column.nullable, default)
+        expected[table.name] = columns
+    return expected
+
+
+def normalized_expression(expression):
+    # Keep literal contents and operators. PostgreSQL deparses these reviewed
+    # checks and index expressions with harmless parentheses and text casts.
+    return re.sub(
+        r"'(?:''|[^'])*'|::(?:text|character varying)(?:\[\])?|\s+|[()]",
+        lambda match: match[0] if match[0].startswith("'") else "",
+        expression or "",
+    )
+
+
+def diagnostic_item(name, status, revision=None, **details):
+    return {"object": name, "status": status, **({"introduced_by": revision} if revision else {}), **details}
+
+
+def column_result(table, actual, expected):
+    found = {row["name"]: row for row in actual}
+    result = []
+    for name, definition in expected.items():
+        revision = ORIGINS.get(table, {}).get(name, TABLE_ORIGINS.get(table, "0720c7d1e4ca"))
+        row = found.get(name)
+        if row is None:
+            result.append(diagnostic_item(name, "MISSING", revision))
+            continue
+        default = row["default_expression"]
+        if default is not None:
+            default = normalized_expression(default).replace("'public.", "'", 1) if name == "id" else normalized_expression(default)
+        expected_type, required, expected_default = definition
+        actual_type = row["type"].lower()
+        expected_default = None if expected_default is None else normalized_expression(expected_default)
+        matches = ((actual_type.replace(", ", ","), row["not_null"], default)
+                   == (expected_type.replace(", ", ","), required, expected_default)
+                   and not row.get("identity_kind") and not row.get("generated_kind"))
+        result.append(diagnostic_item(name, "PASS" if matches else "MISMATCH", revision,
+                                      expected_type=expected_type, actual_type=actual_type,
+                                      actual_nullable=not row["not_null"], default_matches=default == expected_default))
+    if len(found) != len(actual):
+        result.append(diagnostic_item("column inventory", "INCOMPLETE"))
+    for name in sorted(found.keys() - expected.keys()):
+        result.append(diagnostic_item(name, "WARNING", reason="Unmapped catalog column."))
+    return result
+
+
+def head_constraints(table):
+    expected = {(kind, columns, f"public.{target}" if target else None, keys)
+                for name, kind, columns, target, keys in CONSTRAINTS if name == table}
+    if table == "appointments":
+        expected.update(("f", (column,), "public.users", ("id",))
+                        for column in ("ended_by_id", "attendance_resolved_by_id"))
+    if table == "payments":
+        expected = {("p", ("id",), None, ()),
+                    ("u", ("appointment_id",), None, ()), ("u", ("reference",), None, ())}
+        expected.update(("f", (column,), f"public.{target}", ("id",)) for column, target in (
+            ("appointment_id", "appointments"), ("student_id", "users"), ("reviewed_by", "users"),
+            ("reconciliation_updated_by_id", "users"),
+        ))
+    return expected
+
+
+def structure_results(table, constraints, indexes):
+    expected = head_constraints(table)
+    observed = {}
+    checks = {}
+    for row in constraints:
+        if row["kind"] == "c":
+            checks[row["name"]] = row
+        else:
+            signature = (row["kind"], tuple(row["columns"]), row["target"], tuple(row["target_columns"]))
+            observed.setdefault(signature, []).append(row)
+    results = []
+    for key in sorted(expected, key=repr):
+        kind, columns, _, _ = key
+        candidates = observed.get(key, [])
+        revision = (ORIGINS.get(table, {}).get(columns[0], TABLE_ORIGINS.get(table, "0720c7d1e4ca"))
+                    if columns else None)
+        if table == "appointments" and kind == "u":
+            revision = "9e45f7e7aa32"
+        valid = len(candidates) == 1 and all(
+            r["valid"] and not r["deferrable"] and not r["deferred"]
+            and (kind != "f" or (r["on_update"],r["on_delete"],r["match_type"]) == ("a","a","s"))
+            and (table != "appointments" or kind != "u" or r["name"] == "uq_appointments_meeting_room")
+            for r in candidates
+        )
+        # A different FK target or key definition is a mismatch, not an absent FK.
+        present = candidates or any(k[:2] == key[:2] for k in observed)
+        results.append(diagnostic_item(f"constraint {kind} ({', '.join(columns)})",
+                                       "PASS" if valid else "MISMATCH" if present else "MISSING", revision))
+    for name, expression in (PAYMENT_CHECKS.items() if table == "payments" else ()):
+        row = checks.get(name)
+        revision = "e9b7c2d41a60" if name.endswith("submission_revision") else (
+            "f4c2a8d91e70" if "reconciliation" in name else "c1a82b7d43ef")
+        valid = row and row["valid"] and normalized_expression(row["expression"]) == expression
+        results.append(diagnostic_item(name, "PASS" if valid else "MISMATCH" if row else "MISSING", revision))
+    for key in sorted(observed.keys() - expected, key=repr):
+        results.append(diagnostic_item(f"additional constraint ({', '.join(key[1])})", "WARNING"))
+    for name in sorted(checks.keys() - (PAYMENT_CHECKS.keys() if table == "payments" else set())):
+        results.append(diagnostic_item(name, "WARNING", reason="Additional CHECK constraint."))
+
+    ordinary = {(cols, True) for kind, cols, _, _ in expected if kind in {"p", "u"}}
+    ordinary |= {(cols, unique) for t, cols, unique in INDEXES if t == table}
+    if table == "payments":
+        ordinary |= {((name,), False) for name in ("student_id", "status", "reconciliation_state")}
+    def valid_index(row):
+        return all((row["valid"], row["ready"], row["live"], row["immediate"],
+                    row["method"] == "btree", not row["nulls_not_distinct"],
+                    row.get("key_count", len(row["columns"])) == len(row["columns"])))
+    for columns, unique in sorted(ordinary):
+        candidates = [r for r in indexes if tuple(r["columns"]) == columns and not r["partial"]]
+        valid = any(r["unique"] == unique and valid_index(r) for r in candidates)
+        revision = ("f4c2a8d91e70" if columns == ("reconciliation_state",) else
+                    "9e45f7e7aa32" if columns == ("meeting_room",) else
+                    TABLE_ORIGINS.get(table, "0720c7d1e4ca"))
+        results.append(diagnostic_item(f"index ({', '.join(columns)})",
+                                       "PASS" if valid else "MISMATCH" if candidates else "MISSING", revision))
+    if table == "payments":
+        for name, unique in TRANSFER_INDEXES.items():
+            candidates = [r for r in indexes if r["name"] == name]
+            valid = len(candidates) == 1 and any(
+                r["unique"] == unique and valid_index(r) and r["partial"] == unique
+                and len(r["columns"]) == 2 and all(
+                    expression.lower().lstrip().startswith("lower(") and normalized_expression(expression).lower() in {
+                        f"lowertrimbothfrom{column}", f"lowertrim{column}", f"lowerbtrim{column}"
+                    } for expression, column in zip(r["columns"], ("method", "transaction_reference"))
+                )
+                and normalized_expression(r.get("predicate")) == ("status='VERIFIED'" if unique else "")
+                for r in candidates
+            )
+            results.append(diagnostic_item(name, "PASS" if valid else "MISMATCH" if candidates else "MISSING",
+                                           "c7e4a1b92d60"))
+    return results
+
+
+def dashboard_schema(data, expected):
+    results = {}
+    tables = data.get("tables")
+    columns = data.get("columns")
+    for table, definitions in expected.items():
+        if not isinstance(tables, list):
+            results[table] = diagnostic_item(table, "INCOMPLETE", reason="Table inventory unavailable.")
+            continue
+        if not any(row["table_name"] == table for row in tables):
+            results[table] = diagnostic_item(table, "MISSING", TABLE_ORIGINS.get(table, "0720c7d1e4ca"))
+            continue
+        if not isinstance(columns, list) or not any(row["table_name"] == table for row in columns):
+            results[table] = diagnostic_item(table, "INCOMPLETE", reason="Column inventory unavailable.")
+            continue
+        findings = column_result(table, [r for r in columns if r["table_name"] == table], definitions)
+        if table in STRUCTURAL_TABLES:
+            if all(isinstance(data.get(kind), list) for kind in ("constraints", "indexes")):
+                findings.extend(structure_results(table, *(
+                    [r for r in data[kind] if r["table_name"] == table] for kind in ("constraints", "indexes")
+                )))
+            else:
+                findings.append(diagnostic_item("constraints and indexes", "INCOMPLETE"))
+        states = {finding["status"] for finding in findings}
+        state = next((value for value in ("INCOMPLETE", "MISSING", "MISMATCH", "WARNING") if value in states), "PASS")
+        results[table] = diagnostic_item(table, state, findings=findings)
+    return results
+
+
+def migration_graph(directory, observed, reference, expected_head):
+    """Read revision declarations only. Never load an Alembic environment."""
+    graph = {}
+    for path in sorted(Path(directory).glob("*.py")):
+        fields = {}
+        for node in ast.parse(path.read_bytes()).body:
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id in {"revision", "down_revision"}):
+                fields[node.targets[0].id] = ast.literal_eval(node.value)
+        revision, parent = fields["revision"], fields["down_revision"]
+        if revision in graph:
+            return diagnostic_item("migration graph", "INCOMPLETE", reason="Duplicate revision declarations.")
+        graph[revision] = (parent,) if isinstance(parent, str) else (parent or ())
+    parents = {parent for links in graph.values() for parent in links}
+    heads = sorted(graph.keys() - parents)
+    bases = sorted(revision for revision in graph if not graph[revision])
+    missing = sorted(parents - graph.keys())
+
+    def order(revisions):
+        ordered, active, seen = [], set(), set()
+
+        def visit(revision):
+            if revision in active:
+                raise ValueError("Migration graph contains a cycle.")
+            if revision in seen or revision not in graph:
+                return
+            active.add(revision)
+            for parent in graph[revision]:
+                visit(parent)
+            active.remove(revision)
+            seen.add(revision)
+            ordered.append(revision)
+
+        for revision in revisions:
+            visit(revision)
+        return ordered
+
+    full = order(heads)
+    disconnected = sorted(graph.keys() - set(full))
+    healthy = heads == [expected_head] and len(bases) == 1 and not missing and not disconnected
+
+    def pending(revisions):
+        if not healthy or not revisions or any(revision not in full for revision in revisions):
+            return None
+        applied = set(order(revisions))
+        return [revision for revision in full if revision not in applied]
+
+    actual_path = pending(observed)
+    return diagnostic_item(
+        "migration graph", "PASS" if healthy and actual_path is not None else "INCOMPLETE",
+        heads=heads, bases=bases, missing_parents=missing, disconnected=disconnected,
+        observed_revisions=observed, pending_from_observed=actual_path,
+        historical_reference=reference, pending_from_historical_reference=pending([reference]),
+    )

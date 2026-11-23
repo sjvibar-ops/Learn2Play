@@ -307,10 +307,12 @@ def baseline_fixture(monkeypatch):
     return catalog, revisions, connection
 
 
-def test_complete_baseline_is_verified(baseline_fixture):
+def test_complete_starting_baseline_still_has_current_dashboard_drift(baseline_fixture):
     _, _, connection = baseline_fixture
     report = diagnostic.inspect(connection)
-    assert report["verdict"] == "verified"
+    assert report["verdict"] == "incomplete"
+    assert report["baseline"]["columns"]["status"] == "verified"
+    assert report["dashboard_schema"]["payments"]["status"] == "MISSING"
     assert report["baseline"]["alembic"]["row_count"] == 1
     assert connection.rolled_back
 
@@ -389,3 +391,98 @@ def test_xp_check_keeps_spaces_inside_string_literals(baseline_fixture):
     report = diagnostic.inspect(connection)
     assert report["baseline"]["constraints"]["incompatible"] == ["ck_xp_events_path"]
     assert "aca demic" not in str(report)
+
+
+@pytest.fixture
+def dashboard_head():
+    module = diagnostic.preflight
+    expected = diagnostic.dashboard_models()
+    table_rows = [{"table_name": table} for table in expected]
+    columns = [dict(table_name=table, name=name, type=kind, not_null=required,
+                    default_expression=default, identity_kind="", generated_kind="")
+               for table, fields in expected.items() for name, (kind, required, default) in fields.items()]
+    constraints = []
+    indexes = []
+    for table in module.STRUCTURAL_TABLES:
+        keys = module.head_constraints(table)
+        for kind, fields, target, targets in keys:
+            constraints.append(dict(table_name=table, kind=kind, columns=fields, target=target,
+                                    target_columns=targets, valid=True, deferrable=False, deferred=False,
+                                    on_update="a", on_delete="a", match_type="s",
+                                    name="uq_appointments_meeting_room" if fields == ("meeting_room",) else "key"))
+        keys_for_indexes = {(fields, True) for kind, fields, _, _ in keys if kind in {"p", "u"}}
+        keys_for_indexes |= {(fields, unique) for t, fields, unique in module.INDEXES if t == table}
+        if table == "payments":
+            keys_for_indexes |= {((field,), False) for field in ("student_id", "status", "reconciliation_state")}
+        indexes.extend(dict(table_name=table, columns=fields, unique=unique, name="index",
+                            valid=True, ready=True, live=True, immediate=True, method="btree",
+                            partial=False, nulls_not_distinct=False) for fields, unique in keys_for_indexes)
+    constraints.extend(dict(table_name="payments", kind="c", name=name, valid=True,
+                            expression=expression.replace("=ANYARRAY", " = ANY (ARRAY") + (")" if "=ANYARRAY" in expression else ""))
+                       for name, expression in module.PAYMENT_CHECKS.items())
+    indexes.extend(dict(table_name="payments", name=name, unique=unique, partial=unique,
+                        columns=("lower(TRIM(BOTH FROM (method)::text))", "lower(btrim(transaction_reference::text))"),
+                        predicate="((status)::text = 'VERIFIED'::text)" if unique else None,
+                        valid=True, ready=True, live=True, immediate=True, method="btree",
+                        nulls_not_distinct=False) for name, unique in module.TRANSFER_INDEXES.items())
+    return expected, dict(tables=table_rows, columns=columns, constraints=constraints, indexes=indexes)
+
+
+def test_compatible_dashboard_head(dashboard_head):
+    expected, data = dashboard_head
+    report = diagnostic.preflight.dashboard_schema(data, expected)
+    assert set(report) == {"users", "role_applications", "appointments", "payments", "xp_events",
+                           "mentor_availability", "reports"}
+    assert {name: row["status"] for name, row in report.items()} == dict.fromkeys(report, "PASS")
+    assert expected["payments"]["ledger_verification_xid"][2] is None
+
+
+@pytest.mark.parametrize(("table", "column", "revision"), [
+    ("users", "password_hash", "0720c7d1e4ca"),
+    ("role_applications", "submitted_at", "a6d2f9c83b10"),
+    ("role_applications", "reviewed_by", "0720c7d1e4ca"),
+    ("appointments", "ended_at", "f4c2a8d91e70"),
+    ("appointments", "payment_required", "c1a82b7d43ef"),
+    ("payments", "ledger_verification_xid", "c83d9f2a71e4"),
+])
+def test_missing_mapped_column_is_detected_without_data_rows(dashboard_head, table, column, revision):
+    expected, data = dashboard_head
+    data["columns"] = [row for row in data["columns"] if (row["table_name"], row["name"]) != (table, column)]
+    result = diagnostic.preflight.dashboard_schema(data, expected)[table]
+    assert result["status"] == "MISSING"
+    assert {"object": column, "status": "MISSING", "introduced_by": revision} in result["findings"]
+
+
+def test_absent_payment_table_has_no_followup_errors(dashboard_head):
+    expected, data = dashboard_head
+    data["tables"] = [row for row in data["tables"] if row["table_name"] != "payments"]
+    data["constraints"] = {"status": "unavailable"}
+    report = diagnostic.preflight.dashboard_schema(data, expected)
+    assert report["payments"] == {"object": "payments", "status": "MISSING", "introduced_by": "c1a82b7d43ef"}
+    assert report["appointments"]["status"] == "INCOMPLETE"
+
+
+def test_payment_check_fk_and_partial_index_drift(dashboard_head):
+    expected, data = dashboard_head
+    check = next(r for r in data["constraints"] if r["name"] == "ck_payment_amount")
+    check["expression"] = "amount >= 1"
+    data["constraints"] = [r for r in data["constraints"] if not (
+        r["table_name"] == "payments" and r.get("columns") == ("reviewed_by",))]
+    index = next(r for r in data["indexes"] if r["name"] == "uq_payments_verified_transfer")
+    index["predicate"] = "status = 'REJECTED'"
+    result = diagnostic.preflight.dashboard_schema(data, expected)["payments"]
+    observed = {item["object"]: item["status"] for item in result["findings"]}
+    assert observed["ck_payment_amount"] == "MISMATCH"
+    assert observed["constraint f (reviewed_by)"] == "MISSING"
+    assert observed["uq_payments_verified_transfer"] == "MISMATCH"
+    assert "REJECTED" not in str(result)
+
+
+def test_unknown_hosted_revision_has_no_claimed_upgrade_path(baseline_fixture):
+    _, revisions, connection = baseline_fixture
+    revisions[:] = [{"version_num": "unknown"}]
+    graph = diagnostic.inspect(connection)["migration_graph"]
+    assert graph["status"] == "INCOMPLETE"
+    assert graph["pending_from_observed"] is None
+    assert graph["pending_from_historical_reference"][0] == "c1a82b7d43ef"
+    assert graph["pending_from_historical_reference"][-1] == diagnostic.EXPECTED_HEAD

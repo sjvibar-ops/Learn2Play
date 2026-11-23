@@ -16,6 +16,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from supabase_development_backup import read_development_url
 import render_development_preflight_catalog as preflight
 
+
+def dashboard_models():
+    # Isolated Python does not add the repository directory to sys.path.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from models import Appointment, MentorAvailability, Payment, Report, RoleApplication, User, XpEvent
+
+    return preflight.model_columns((User, RoleApplication, Appointment, Payment, XpEvent,
+                                    MentorAvailability, Report))
+
+
 PROJECT = "pxiwoowpoewxvnsjwfdw"
 EXPECTED_REVISION = "d2b7a4e9310c"
 EXPECTED_HEAD = "83ca40c9f279"
@@ -264,7 +274,7 @@ def catalog_sections(data):
             sections[name] = preflight.status(preflight.digest_definitions(data[name], fields))
     if isinstance(data["indexes"], list):
         sections["indexes"] = preflight.status([
-            {key: value for key, value in row.items() if key != "columns"} for row in data["indexes"]
+            {key: value for key, value in row.items() if key not in {"columns", "predicate"}} for row in data["indexes"]
         ])
 
     # Privilege queries are cross products. A partial result cannot prove coverage.
@@ -407,10 +417,22 @@ def inspect(connection):
             [], "verified" if identity.get("effective_role") == identity.get("session_role") == "postgres"
             else "mismatch",
         )
-        complete = all(section["status"] == "verified" for section in (*baseline.values(), *sections.values()))
+        dashboard = preflight.dashboard_schema(data, dashboard_models())
+        revisions = [row["version_num"] for row in baseline["alembic"].get("rows", [])]
+        try:
+            graph = preflight.migration_graph(
+                Path(__file__).resolve().parents[1] / "migrations" / "versions",
+                revisions, EXPECTED_REVISION, EXPECTED_HEAD,
+            )
+        except (OSError, KeyError, SyntaxError, ValueError):
+            graph = preflight.diagnostic_item("migration graph", "INCOMPLETE",
+                                              reason="Could not establish local revision history.")
+        complete = (all(section["status"] == "verified" for section in (*baseline.values(), *sections.values()))
+                    and graph["status"] == "PASS"
+                    and all(item["status"] in {"PASS", "WARNING"} for item in dashboard.values()))
         return {
             "identity": identity, "expected_revision": EXPECTED_REVISION, "expected_head": EXPECTED_HEAD,
-            "baseline": baseline, "catalog": sections,
+            "baseline": baseline, "catalog": sections, "dashboard_schema": dashboard, "migration_graph": graph,
             "financial_runtime_exists": (any(r["rolname"] == "learn2play_financial_runtime"
                                              for r in data["roles"])
                                          if isinstance(data["roles"], list) else None),
