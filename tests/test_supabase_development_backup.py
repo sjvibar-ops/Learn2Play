@@ -17,12 +17,20 @@ ROOT = Path(__file__).resolve().parents[1]
 backup = SimpleNamespace(**runpy.run_path(str(ROOT / "scripts" / "supabase_development_backup.py")))
 Blocked = backup.catalog.Blocked
 PASSWORD = "offline-backup-fixture"
+CURRENT_TABLES = (
+    "alembic_version", "appointments", "credentials", "mentor_availability",
+    "mentor_unavailable_dates", "messages", "reports", "role_applications", "users", "xp_events",
+)
+CURRENT_SEQUENCES = tuple(f"{name}_id_seq" for name in CURRENT_TABLES if name != "alembic_version")
 
 
 class DevelopmentBackupTests(unittest.TestCase):
     def setUp(self):
         self.host = backup.development.DIRECT_HOST
-        self.args = SimpleNamespace(expected_host=self.host, expected_port=5432, expected_runtime_role="fixture")
+        self.args = SimpleNamespace(expected_host=self.host, expected_port=5432, expected_runtime_role="fixture",
+                                    expected_revision=backup.EXPECTED_REVISION)
+        self.scope = dict(postgresql_version="17.11", alembic_revision=backup.EXPECTED_REVISION,
+                          tables=sorted(backup.TABLES), sequences=[])
         self.identity = dict(database="postgres", schema="public", role="fixture",
                              session_role="fixture", read_only="on", version="170011")
 
@@ -133,6 +141,79 @@ class DevelopmentBackupTests(unittest.TestCase):
             with self.subTest(override=override), patch.dict(rows[0], override), self.assertRaises(Blocked):
                 backup.verify_scope(connection, self.identity, self.args)
 
+    def scope_connection(self, tables, sequences, revisions):
+        rows = [dict(name=name, kind=kind, readable=True, rls_active=False,
+                     inheritance=False, extension_member=False)
+                for kind, names in (("r", tables), ("S", sequences)) for name in names]
+        connection = Mock()
+        connection.execute.side_effect = [
+            Mock(**{"fetchone.return_value": {"allowed": True}}),
+            Mock(**{"fetchall.return_value": rows}),
+            Mock(**{"fetchone.return_value": {"exists": False}}),
+            Mock(**{"fetchall.return_value": [{"version_num": revision} for revision in revisions]}),
+        ]
+        return connection
+
+    def test_current_checkpoint_records_observed_scope_in_manifest(self):
+        self.args.expected_revision = "d2b7a4e9310c"
+        connection = self.scope_connection(CURRENT_TABLES, CURRENT_SEQUENCES, ["d2b7a4e9310c"])
+        observed = backup.verify_scope(connection, dict(self.identity, version="170012"), self.args)
+        with TemporaryDirectory() as root:
+            destination = Path(root)
+            archive = destination / "development.dump.partial"
+            archive.write_bytes(b"PGDMP offline fixture")
+            checksum = backup.archive_checksum(archive)
+            backup.write_manifest(destination, archive, checksum, observed)
+            manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["project_reference"], "pxiwoowpoewxvnsjwfdw")
+            self.assertEqual(manifest["alembic_revision"], "d2b7a4e9310c")
+            self.assertEqual(manifest["postgresql_version"], "17.12")
+            self.assertEqual(manifest["inventory"], {
+                "tables": list(CURRENT_TABLES), "sequences": list(CURRENT_SEQUENCES),
+            })
+            self.assertEqual(manifest["archive_size_bytes"], len(b"PGDMP offline fixture"))
+            self.assertEqual(manifest["sha256"], checksum)
+            self.assertFalse(manifest["restore_verified"])
+
+    def test_legacy_checkpoint_still_accepts_its_original_inventory(self):
+        old_tables = CURRENT_TABLES[:-1]
+        old_sequences = CURRENT_SEQUENCES[:-1]
+        connection = self.scope_connection(old_tables, old_sequences, ["9e45f7e7aa32"])
+        observed = backup.verify_scope(connection, self.identity, self.args)
+        self.assertEqual(observed["tables"], list(old_tables))
+        self.assertEqual(observed["sequences"], list(old_sequences))
+        self.assertEqual(observed["postgresql_version"], "17.11")
+        with self.assertRaisesRegex(Blocked, "PostgreSQL version"):
+            backup.verify_scope(Mock(), dict(self.identity, version="170012"), self.args)
+
+    def test_current_checkpoint_rejects_wrong_revision_inventory_and_version(self):
+        self.args.expected_revision = "d2b7a4e9310c"
+        for tables, sequences, revisions, version, reason in (
+            (CURRENT_TABLES[:-1], CURRENT_SEQUENCES, ["d2b7a4e9310c"], "170011", "inventory|baseline tables"),
+            (CURRENT_TABLES, CURRENT_SEQUENCES[:-1], ["d2b7a4e9310c"], "170011", "inventory|baseline tables"),
+            ((*CURRENT_TABLES, "unexpected"), CURRENT_SEQUENCES, ["d2b7a4e9310c"], "170011", "inventory|baseline tables"),
+            (CURRENT_TABLES, (*CURRENT_SEQUENCES, "unexpected_id_seq"), ["d2b7a4e9310c"], "170011", "inventory|baseline tables"),
+            (CURRENT_TABLES, CURRENT_SEQUENCES, ["9e45f7e7aa32"], "170011", "Alembic revision"),
+            (CURRENT_TABLES, CURRENT_SEQUENCES, ["d2b7a4e9310c"] * 2, "170011", "Alembic revision"),
+            (CURRENT_TABLES, CURRENT_SEQUENCES, ["d2b7a4e9310c"], "180004", "PostgreSQL version"),
+        ):
+            with self.subTest(tables=tables, sequences=sequences, revisions=revisions, version=version):
+                connection = self.scope_connection(tables, sequences, revisions)
+                with self.assertRaisesRegex(Blocked, reason):
+                    backup.verify_scope(connection, dict(self.identity, version=version), self.args)
+
+    def test_current_archive_requires_exact_table_and_sequence_entries(self):
+        entries = [f"1; 0 1 {kind} public {name} owner\n".encode()
+                   for kind, names in (("TABLE DATA", CURRENT_TABLES), ("SEQUENCE SET", CURRENT_SEQUENCES))
+                   for name in names]
+        listing = b"".join(entries)
+        backup.verify_listing(listing, CURRENT_SEQUENCES, CURRENT_TABLES)
+        for invalid in (b"".join(entries[:-1]), b"".join(entries[1:]),
+                        listing + entries[-1],
+                        listing + b"42; 0 0 SEQUENCE SET other unexpected_id_seq owner\n"):
+            with self.subTest(invalid=invalid), self.assertRaises(Blocked):
+                backup.verify_listing(invalid, CURRENT_SEQUENCES, CURRENT_TABLES)
+
     def test_tool_accepts_success_with_or_without_stderr(self):
         for stderr in (b"", b"Password: ", b"pg_dump: warning: benign fixture"):
             with self.subTest(stderr=stderr), patch.object(backup.subprocess, "run", return_value=SimpleNamespace(
@@ -190,7 +271,7 @@ class DevelopmentBackupTests(unittest.TestCase):
                 with patch.dict(backup.create_archive.__globals__, {
                     "run_tool": run, "create_restricted_directory": Mock(),
                     "hidden_windows_console": nullcontext,
-                    "verify_scope": Mock(return_value=set()), "write_manifest": finalize,
+                    "verify_scope": Mock(return_value=self.scope), "write_manifest": finalize,
                 }), self.assertRaises(Blocked):
                     backup.create_archive(Path("unused"), (dump, restore), parameters, self.args,
                                           connect, None, make_conninfo)
@@ -215,7 +296,7 @@ class DevelopmentBackupTests(unittest.TestCase):
                 return SimpleNamespace(returncode=1, stderr=b"", stdout=b"")
 
             with patch.dict(backup.create_archive.__globals__, {
-                "create_restricted_directory": Mock(), "verify_scope": Mock(return_value=set()),
+                "create_restricted_directory": Mock(), "verify_scope": Mock(return_value=self.scope),
                 "hidden_windows_console": nullcontext,
             }), patch.object(backup.subprocess, "run", side_effect=failed_dump) as run:
                 with self.assertRaisesRegex(Blocked, "pg_dump failed"):
@@ -240,10 +321,10 @@ class DevelopmentBackupTests(unittest.TestCase):
             archive = destination / "development.dump.partial"
             archive.write_bytes(b"PGDMP offline fixture, not an actual backup")
             with self.assertRaises(Blocked):
-                backup.write_manifest(destination, archive, "")
+                backup.write_manifest(destination, archive, "", self.scope)
             self.assertFalse((destination / "manifest.json").exists())
             checksum = backup.archive_checksum(archive)
-            backup.write_manifest(destination, archive, checksum)
+            backup.write_manifest(destination, archive, checksum, self.scope)
             manifest = (destination / "manifest.json").read_text(encoding="utf-8")
             result = json.loads(manifest)
             self.assertEqual(result["sha256"], checksum)
@@ -293,7 +374,7 @@ class DevelopmentBackupTests(unittest.TestCase):
                 connect.return_value.__enter__.return_value = connection
                 checksum = Mock()
                 with patch.dict(backup.create_archive.__globals__, {
-                    "create_restricted_directory": Mock(), "verify_scope": Mock(return_value=set()),
+                    "create_restricted_directory": Mock(), "verify_scope": Mock(return_value=self.scope),
                     "hidden_windows_console": nullcontext,
                     "archive_checksum": checksum,
                 }), patch.object(backup.subprocess, "run", side_effect=[

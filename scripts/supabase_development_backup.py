@@ -19,6 +19,7 @@ import supabase_development_preflight as development
 catalog = development.catalog
 EXPECTED_VERSION = "170011"
 EXPECTED_REVISION = "9e45f7e7aa32"
+CURRENT_REVISION = "d2b7a4e9310c"
 TOOL_VERSION = "18.4"
 BIN = Path("C:/Program Files/PostgreSQL/18/bin")
 TABLES = {
@@ -26,6 +27,10 @@ TABLES = {
     "mentor_unavailable_dates", "messages", "reports", "role_applications", "users",
 }
 BASELINE_SEQUENCES = {f"{name}_id_seq" for name in TABLES - {"alembic_version"}}
+CHECKPOINTS = {
+    EXPECTED_REVISION: (TABLES, BASELINE_SEQUENCES),
+    CURRENT_REVISION: (TABLES | {"xp_events"}, BASELINE_SEQUENCES | {"xp_events_id_seq"}),
+}
 INVENTORY = """
 SELECT c.relname AS name, c.relkind AS kind,
  CASE WHEN c.relkind='S' THEN pg_catalog.has_sequence_privilege(c.oid,'SELECT')
@@ -308,8 +313,13 @@ def tools(directory):
 
 def verify_scope(connection, identity, args):
     catalog.verify_identity(identity, args)
-    if str(identity["version"]) != EXPECTED_VERSION:
-        raise catalog.Blocked("PostgreSQL version differs from the reviewed Development version 17.11.")
+    expected_revision = args.expected_revision
+    expected_tables, expected_sequences = CHECKPOINTS[expected_revision]
+    version = str(identity["version"])
+    if (not re.fullmatch(r"17[0-9]{4}", version)
+            or (expected_revision == EXPECTED_REVISION and version != EXPECTED_VERSION)):
+        raise catalog.Blocked("PostgreSQL version differs from the approved Development checkpoint.")
+    server_version = f"17.{int(version[2:])}"
     if not connection.execute(
         "SELECT pg_catalog.has_schema_privilege('public', 'USAGE') AS allowed"
     ).fetchone()["allowed"]:
@@ -317,30 +327,39 @@ def verify_scope(connection, identity, args):
     scope = connection.execute(INVENTORY).fetchall()
     tables = {row["name"] for row in scope if row["kind"] == "r"}
     sequences = {row["name"] for row in scope if row["kind"] == "S"}
-    if tables != TABLES or not BASELINE_SEQUENCES <= sequences or any(
+    if (tables != expected_tables or sequences != expected_sequences
+            or len(scope) != len(tables) + len(sequences) or any(
         row["kind"] not in ("r", "S") or not row["readable"] or row["rls_active"]
         or row["inheritance"] or row["extension_member"]
         or not re.fullmatch(r"[a-z_][a-z0-9_]*", row["name"]) for row in scope
-    ):
+    )):
         raise catalog.Blocked("Cannot prove complete read access to the approved baseline tables and sequences.")
     if connection.execute("SELECT EXISTS (SELECT FROM pg_catalog.pg_largeobject_metadata)").fetchone()["exists"]:
         raise catalog.Blocked("Large objects are present; the approved archive scope cannot establish their coverage.")
     revisions = connection.execute("SELECT version_num FROM ONLY public.alembic_version LIMIT 2").fetchall()
-    if [row["version_num"] for row in revisions] != [EXPECTED_REVISION]:
+    if [row["version_num"] for row in revisions] != [expected_revision]:
         raise catalog.Blocked("Installed Alembic revision differs from the approved Development baseline.")
-    return sequences
+    return {
+        "postgresql_version": server_version,
+        "alembic_revision": revisions[0]["version_num"],
+        "tables": sorted(tables),
+        "sequences": sorted(sequences),
+    }
 
 
-def verify_listing(listing, sequences):
-    entries = set(re.findall(rb"(?m)^\d+; \d+ \d+ (TABLE DATA|SEQUENCE SET) public ([a-z_0-9]+) ", listing))
-    expected = {(b"TABLE DATA", name.encode("ascii")) for name in TABLES}
-    expected.update((b"SEQUENCE SET", name.encode("ascii")) for name in sequences)
-    if entries != expected:
+def verify_listing(listing, sequences, tables=TABLES):
+    entries = re.findall(
+        rb"(?m)^\d+;[ \t]+\d+[ \t]+\d+[ \t]+(TABLE DATA|SEQUENCE SET)[ \t]+(\S+)[ \t]+(\S+)",
+        listing,
+    )
+    expected = {(b"TABLE DATA", b"public", name.encode("ascii")) for name in tables}
+    expected.update((b"SEQUENCE SET", b"public", name.encode("ascii")) for name in sequences)
+    if len(entries) != len(expected) or set(entries) != expected:
         raise catalog.Blocked("Archive listing does not contain the complete approved table and sequence inventory.")
 
 
-def verify_archive(restore, archive, sequences):
-    verify_listing(run_tool(restore, ["--list", str(archive)]), sequences)
+def verify_archive(restore, archive, sequences, tables=TABLES):
+    verify_listing(run_tool(restore, ["--list", str(archive)]), sequences, tables)
     # Unfiltered script output forces pg_restore to decode the payload. Direct it
     # to the OS null device from process creation so no SQL is kept or displayed.
     run_tool(restore, ["--format=custom", "--exit-on-error", "--file=-", str(archive)],
@@ -355,15 +374,16 @@ def archive_checksum(archive):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def write_manifest(destination, archive, checksum):
+def write_manifest(destination, archive, checksum, scope):
     if not checksum or not re.fullmatch(r"[a-f0-9]{64}", checksum):
         raise catalog.Blocked("A valid SHA-256 checksum is required to complete the backup.")
     manifest = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "project_reference": catalog.DEVELOPMENT,
-        "postgresql_version": "17.11",
+        "postgresql_version": scope["postgresql_version"],
         "backup_tool_version": TOOL_VERSION,
-        "alembic_revision": EXPECTED_REVISION,
+        "alembic_revision": scope["alembic_revision"],
+        "inventory": {"tables": scope["tables"], "sequences": scope["sequences"]},
         "archive": "development.dump",
         "archive_size_bytes": archive.stat().st_size,
         "sha256": checksum,
@@ -387,7 +407,7 @@ def create_archive(destination, tool_pair, parameters, args, connect, row_factor
         connection.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
         try:
             identity = connection.execute(catalog.IDENTITY).fetchone()
-            sequences = verify_scope(connection, identity, args)
+            scope = verify_scope(connection, identity, args)
             snapshot = connection.execute("SELECT pg_catalog.pg_export_snapshot() AS snapshot").fetchone()["snapshot"]
             if not re.fullmatch(r"[A-Fa-f0-9]+-[A-Fa-f0-9]+-\d+", snapshot):
                 raise catalog.Blocked("Could not verify an export snapshot.")
@@ -403,8 +423,8 @@ def create_archive(destination, tool_pair, parameters, args, connect, row_factor
                 ])
         finally:
             connection.execute("ROLLBACK")
-    verify_archive(restore, archive, sequences)
-    write_manifest(destination, archive, archive_checksum(archive))
+    verify_archive(restore, archive, scope["sequences"], scope["tables"])
+    write_manifest(destination, archive, archive_checksum(archive), scope)
 
 
 def require_confirmation(response):
@@ -418,6 +438,8 @@ def main():
     parser.add_argument("--expected-port", required=True, type=int)
     parser.add_argument("--expected-backup-role", required=True, dest="expected_runtime_role")
     parser.add_argument("--backup-name", required=True)
+    parser.add_argument("--expected-revision", choices=CHECKPOINTS, default=EXPECTED_REVISION,
+                        help="Approved checkpoint profile. Defaults to the legacy checkpoint.")
     args = parser.parse_args()
     if (os.name != "nt" or not sys.stdin.isatty() or not sys.stderr.isatty()
             or not development.approved_host(args.expected_host.lower()) or args.expected_port != 5432
@@ -428,6 +450,7 @@ def main():
     destination = destination_for(Path.home(), catalog.ROOT, args.backup_name)
     tool_pair = tools(BIN)
     print("Development project:", catalog.DEVELOPMENT)
+    print("Expected Alembic revision:", args.expected_revision)
     print("Local backup directory:", destination)
     require_confirmation(input("Type BACK UP DEVELOPMENT ONLY to connect and export: "))
     from psycopg import connect
